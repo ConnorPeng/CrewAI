@@ -5,6 +5,13 @@ from typing import Dict, List, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
 from .services.mock_github_service import MockGitHubService
+import yaml
+import os
+
+def load_config(config_name: str) -> dict:
+    config_path = os.path.join(os.path.dirname(__file__), 'config', f'{config_name}.yaml')
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
 
 class StandupContext(BaseModel):
     user_id: str
@@ -34,11 +41,23 @@ class StandupContext(BaseModel):
     communication_style: Optional[str] = None
     writing_style_preference: str = "bullets"
 
+    def to_dict(self):
+        # Convert the object to a dictionary
+        data = self.dict()
+
+        # Format the datetime objects to strings
+        data['timestamp'] = self.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        if self.last_update:
+            data['last_update'] = self.last_update.strftime("%Y-%m-%d %H:%M:%S") 
+        return data
+
 @CrewBase
 class Rhythms():
     def __init__(self):
         self.github_service = MockGitHubService()  # Initialize GitHub service
         self.memory_store = {}  # Simple memory store for demonstration
+        self.agent_config = load_config('agents')
+        self.task_config = load_config('tasks')
         
     def _get_github_activity(self, user_id: str) -> Dict:
         """Get GitHub activity for the user"""
@@ -51,87 +70,66 @@ class Rhythms():
 
     @agent
     def chat_manager(self) -> Agent:
+        config = self.agent_config['chat_manager']
         return Agent(
             name="Chat Manager",
-            role="Manages the overall conversation flow and user interaction",
-            goal="Ensure smooth communication and understanding between user and system",
-            backstory="An experienced conversation facilitator that helps maintain context and clarity",
+            role=config['role'],
+            goal=config['goal'],
+            backstory=config['backstory'],
             verbose=True,
             allow_delegation=True,
             tools=[SerperDevTool()]
         )
 
     @agent
-    def standup_initiator(self) -> Agent:
-        return Agent(
-            name="Standup Initiator",
-            role="Initiates and manages the standup process",
-            goal="Start standup sessions and gather initial context",
-            backstory="An experienced scrum master that helps teams run effective standups",
-            verbose=True,
-            allow_delegation=True
-        )
-
-    @agent
     def activity_analyzer(self) -> Agent:
+        config = self.agent_config['activity_analyzer']
         return Agent(
             name="Activity Analyzer",
-            role="Analyzes GitHub activity and creates draft updates",
-            goal="Generate comprehensive activity summaries from GitHub data",
-            backstory="A detail-oriented analyst that tracks and summarizes development work",
+            role=config['role'],
+            goal=config['goal'],
+            backstory=config['backstory'],
             verbose=True,
             allow_delegation=True
         )
 
     @agent
-    def followup_specialist(self) -> Agent:
+    def context_manager(self) -> Agent:
+        config = self.agent_config['context_manager']
         return Agent(
-            name="Followup Specialist",
-            role="Asks clarifying questions and ensures updates are complete",
-            goal="Ensure all updates are clear and actionable",
-            backstory="An experienced coach that helps team members communicate effectively",
+            name="Context Manager",
+            role=config['role'],
+            goal=config['goal'],
+            backstory=config['backstory'],
             verbose=True,
             allow_delegation=True
         )
 
     @task
     def start_standup(self) -> Task:
+        config = self.task_config['start_standup_task']
         return Task(
-            description="""
-            Initialize standup session by:
-            1. Fetching recent GitHub activity
-            2. Loading previous context and patterns
-            3. Setting up initial standup structure
-            """,
-            expected_output="Initial standup context with GitHub activity data and historical patterns",
-            agent=self.standup_initiator()
+            description=config['description'],
+            expected_output=config['expected_output'],
+            agent=self.activity_analyzer()
         )
 
     @task
     def analyze_activity(self) -> Task:
+        config = self.task_config['analyze_activity_task']
         return Task(
-            description="""
-            Analyze GitHub activity and create draft update by:
-            1. Reviewing code changes, PRs, and commits
-            2. Identifying potential blockers from pending reviews
-            3. Creating initial draft of accomplishments and plans
-            """,
-            expected_output="Draft standup update with accomplishments, blockers, and plans based on activity",
+            description=config['description'],
+            expected_output=config['expected_output'],
             agent=self.activity_analyzer()
         )
 
     @task
     def process_update(self) -> Task:
+        config = self.task_config['process_update_task']
         return Task(
-            description="""
-            Process user's update by:
-            1. Analyzing completeness of update
-            2. Identifying areas needing clarification
-            3. Generating relevant follow-up questions
-            4. Ensuring all three components (accomplishments, blockers, plans) are clear
-            """,
-            expected_output="Processed update with follow-up questions if needed",
-            agent=self.followup_specialist()
+            description=config['description'],
+            expected_output=config['expected_output'],
+            agent=self.context_manager()
         )
 
     @crew
@@ -139,9 +137,8 @@ class Rhythms():
         """Creates an intelligent autonomous Standup crew for handling daily standups"""
         return Crew(
             agents=[
-                self.standup_initiator(),
                 self.activity_analyzer(),
-                self.followup_specialist(),
+                self.context_manager(),
                 self.chat_manager()
             ],
             tasks=[
@@ -149,6 +146,5 @@ class Rhythms():
                 self.analyze_activity(),
                 self.process_update()
             ],
-            process=Process.sequential,
-            verbose=True
+            process=Process.sequential
         )
