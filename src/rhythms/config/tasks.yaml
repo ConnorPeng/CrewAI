@@ -1,76 +1,36 @@
-start_standup_task:
+collect_user_update_task:
   description: >
-    Initialize standup session by fetching GitHub activity and preparing context.
-    Tasks include:
-    1. Fetch recent GitHub commits, PRs, and reviews
-    2. Load user's previous standup context
-    3. Prepare initial standup structure
+    Collect the user's standup update through natural conversation. Tasks include:
+    1. Initiate a conversation to gather accomplishments, blockers, and plans.
+    2. Extract structured updates from user responses.
+    3. Maintain a conversational and user-friendly tone throughout.
   expected_output: >
-    A prepared standup session with:
-    - Recent GitHub activity data
-    - Previous standup context
-    - Initial structure for update
-  agent: activity_analyzer
-
-analyze_activity_task:
-  description: >
-    Create a draft standup update by analyzing GitHub activity.
-    Tasks include:
-    1. Review code changes and PRs from last 24 hours
-    2. Identify potential blockers from pending reviews
-    3. Draft initial accomplishments and plans
-  expected_output: >
-    A draft standup update containing:
-    - List of code accomplishments
-    - Identified technical blockers
-    - Suggested plans based on ongoing work
-  agent: activity_analyzer
-
-process_update_task:
-  description: >
-    Process user's standup update and ensure completeness.
-    Tasks include:
-    1. Analyze update completeness
-    2. Generate clarifying questions
-    3. Track recurring patterns
-    4. Ensure all components are addressed
-  expected_output: >
-    A processed update containing:
-    - Validated accomplishments, blockers, and plans
-    - Follow-up questions if needed
-    - Updated context for future standups
-  agent: context_manager
-
-orchestrate_standup_task:
-  description: >
-    Coordinate the entire standup process autonomously. Make decisions about:
-    - When to present activity-based drafts
-    - Which follow-up questions to ask and when
-    - How to adapt the conversation flow
-    - When to probe deeper on potential issues
-    - When to conclude the standup
-  expected_output: >
-    An orchestration plan containing:
-    - Next immediate action
-    - Conversation flow strategy
-    - Priority follow-up items
-    - Draft presentation timing
-    - Completion status
+    A structured representation of the user's standup update, including:
+    - Accomplishments
+    - Blockers
+    - Plans
   agent: chat_manager
 
-generate_summary_task:
+fetch_github_activity_task:
   description: >
-    Create an intelligent summary of the standup combining:
-    - User's natural language update
-    - Activity-based draft
-    - Historical context
-    - Identified blockers and patterns
-    Format according to user preferences and highlight critical items.
+    Fetch and summarize the user's recent GitHub activity. Tasks include:
+    1. Use the `github_activity` tool to gather recent commits, pull requests, and reviews.
+    2. Analyze activity to identify accomplishments, ongoing work, and blockers.
   expected_output: >
-    A comprehensive summary containing:
-    - Key accomplishments and plans
-    - Active and resolved blockers
-    - Required follow-up actions
-    - Trending patterns or issues
-    - Recommendations for team/manager attention
-  agent: context_manager
+    A summary of the user's GitHub activity, including:
+    - Accomplishments
+    - Ongoing work
+    - Identified blockers
+  agent: github_activity_agent
+
+draft_standup_update_task:
+  description: >
+    Generate a draft standup update based on the user's input and GitHub activity. Tasks include:
+    1. Integrate user-provided updates with GitHub activity insights.
+    2. Create a structured draft including accomplishments, blockers, and plans.
+  expected_output: >
+    A well-structured draft of the standup update, including:
+    - Key accomplishments
+    - Identified blockers
+    - Planned next steps
+  agent: draft_agent
