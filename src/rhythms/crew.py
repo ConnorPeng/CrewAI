@@ -4,11 +4,11 @@ from crewai.tools import tool
 from typing import Dict, List, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
-from .services.mock_github_service import MockGitHubService
 import yaml
 import os
 import logging
 import json
+from src.rhythms.services.github_service import GitHubService
 
 # Configure logging
 logging.basicConfig(
@@ -21,10 +21,14 @@ logger = logging.getLogger(__name__)
 class Rhythms():
     @tool("github_activity")
     def get_github_activity(user_id: str) -> Dict:
-      """
-      Fetches GitHub activity for a given user, including their recent commits, pull requests, and other relevant activity.
-      """
-      return json.dumps({'accomplishments': ["Made 5 commits in last 24 hours in multiple repos"], 'ongoing_work': ["Fix ABC bug in UI"], 'blockers': ["Review 21PRs"]})
+        """
+        Fetches GitHub activity for a given user using a personal access token.
+        """
+        github_service = GitHubService()
+        activity = github_service.get_user_activity("ConnorPeng", 3)
+        summary = github_service.summarize_activity(activity)
+        return summary
+
 
     # @agent
     # def chat_manager(self) -> Agent:
@@ -118,7 +122,6 @@ class Rhythms():
         logger.info("Creating Standup crew")
         crew = Crew(
             agents=[
-                # self.chat_manager(),
                 self.github_activity_agent(),
                 self.draft_agent(),
                 self.user_update_agent()
@@ -127,7 +130,6 @@ class Rhythms():
                 self.fetch_github_activity(),
                 self.draft_standup_update(),
                 self.collect_user_update(),
-                # self.standup_manager_task()
             ],
             process=Process.sequential,
             memory=True,
