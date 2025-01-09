@@ -1,35 +1,76 @@
-analyze_response_task:
+start_standup_task:
   description: >
-    Analyze the user's standup response for sentiment, completeness, and key points.
-    Identify any potential blockers or issues that need attention.
+    Initialize standup session by fetching GitHub activity and preparing context.
+    Tasks include:
+    1. Fetch recent GitHub commits, PRs, and reviews
+    2. Load user's previous standup context
+    3. Prepare initial standup structure
   expected_output: >
-    A detailed analysis of the response including sentiment, key points, completeness score,
-    and any identified blockers or issues.
-  agent: chat_manager
+    A prepared standup session with:
+    - Recent GitHub activity data
+    - Previous standup context
+    - Initial structure for update
+  agent: activity_analyzer
 
 analyze_activity_task:
   description: >
-    Analyze the user's recent GitHub and Linear activity for patterns and insights.
-    Look for work progress, potential blockers, and collaboration needs.
+    Create a draft standup update by analyzing GitHub activity.
+    Tasks include:
+    1. Review code changes and PRs from last 24 hours
+    2. Identify potential blockers from pending reviews
+    3. Draft initial accomplishments and plans
   expected_output: >
-    A comprehensive analysis of work patterns including code activity, task progress,
-    potential blockers, and collaboration requirements.
+    A draft standup update containing:
+    - List of code accomplishments
+    - Identified technical blockers
+    - Suggested plans based on ongoing work
   agent: activity_analyzer
 
-decide_next_action_task:
+process_update_task:
   description: >
-    Based on current context and analysis results, determine the most appropriate
-    next action in the standup process.
+    Process user's standup update and ensure completeness.
+    Tasks include:
+    1. Analyze update completeness
+    2. Generate clarifying questions
+    3. Track recurring patterns
+    4. Ensure all components are addressed
   expected_output: >
-    A decision object containing the next action, priority level, reasoning,
-    and relevant context information.
+    A processed update containing:
+    - Validated accomplishments, blockers, and plans
+    - Follow-up questions if needed
+    - Updated context for future standups
   agent: context_manager
+
+orchestrate_standup_task:
+  description: >
+    Coordinate the entire standup process autonomously. Make decisions about:
+    - When to present activity-based drafts
+    - Which follow-up questions to ask and when
+    - How to adapt the conversation flow
+    - When to probe deeper on potential issues
+    - When to conclude the standup
+  expected_output: >
+    An orchestration plan containing:
+    - Next immediate action
+    - Conversation flow strategy
+    - Priority follow-up items
+    - Draft presentation timing
+    - Completion status
+  agent: chat_manager
 
 generate_summary_task:
   description: >
-    Create a final summary of the standup including key updates, blockers,
-    and any required follow-up actions.
+    Create an intelligent summary of the standup combining:
+    - User's natural language update
+    - Activity-based draft
+    - Historical context
+    - Identified blockers and patterns
+    Format according to user preferences and highlight critical items.
   expected_output: >
-    A concise but comprehensive summary formatted in markdown, highlighting
-    the most important points and next steps.
+    A comprehensive summary containing:
+    - Key accomplishments and plans
+    - Active and resolved blockers
+    - Required follow-up actions
+    - Trending patterns or issues
+    - Recommendations for team/manager attention
   agent: context_manager
