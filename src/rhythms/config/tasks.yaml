@@ -1,17 +1,35 @@
-research_task:
+analyze_response_task:
   description: >
-    Conduct a thorough research about {topic}
-    Make sure you find any interesting and relevant information given
-    the current year is 2024.
+    Analyze the user's standup response for sentiment, completeness, and key points.
+    Identify any potential blockers or issues that need attention.
   expected_output: >
-    A list with 10 bullet points of the most relevant information about {topic}
-  agent: researcher
+    A detailed analysis of the response including sentiment, key points, completeness score,
+    and any identified blockers or issues.
+  agent: chat_manager
 
-reporting_task:
+analyze_activity_task:
   description: >
-    Review the context you got and expand each topic into a full section for a report.
-    Make sure the report is detailed and contains any and all relevant information.
+    Analyze the user's recent GitHub and Linear activity for patterns and insights.
+    Look for work progress, potential blockers, and collaboration needs.
   expected_output: >
-    A fully fledged report with the main topics, each with a full section of information.
-    Formatted as markdown without '```'
-  agent: reporting_analyst
+    A comprehensive analysis of work patterns including code activity, task progress,
+    potential blockers, and collaboration requirements.
+  agent: activity_analyzer
+
+decide_next_action_task:
+  description: >
+    Based on current context and analysis results, determine the most appropriate
+    next action in the standup process.
+  expected_output: >
+    A decision object containing the next action, priority level, reasoning,
+    and relevant context information.
+  agent: context_manager
+
+generate_summary_task:
+  description: >
+    Create a final summary of the standup including key updates, blockers,
+    and any required follow-up actions.
+  expected_output: >
+    A concise but comprehensive summary formatted in markdown, highlighting
+    the most important points and next steps.
+  agent: context_manager
