@@ -1,15 +1,32 @@
 collect_user_update_task:
   description: >
-    Collect the user's standup update through natural conversation. Tasks include:
-    1. Initiate a conversation to gather accomplishments, blockers, and plans.
-    2. Extract structured updates from user responses.
-    3. Maintain a conversational and user-friendly tone throughout.
+    Present the draft standup update to the user and gather their updates. Please do not halicunate! only use facts. Tasks include:
+    1. Exam the draft to check for any unclear or incomplete items.
+    2. ask clarifying questions if necessary and ask for user input to address the unclear items.
+    3. incorporate user input into the draft, don't halicunate! only use that facts.
+    4. iterate this process until the user is satisfied with the draft by user input expressing satisfaction.
+    5. return the final draft.
   expected_output: >
-    A structured representation of the user's standup update, including:
+    A structured representation of the user's standup update, with the following sections:
     - Accomplishments
     - Blockers
     - Plans
-  agent: chat_manager
+  agent: user_update_agent
+  human_input: true
+
+
+# standup_manager_task:
+#   description: >
+#     Oversee the entire standup process by coordinating agents and tasks. Tasks include:
+#     1. Initiate the `fetch_github_activity_task`.
+#     2. Wait for GitHub activity summary and pass it to `draft_standup_update_task`.
+#     3. Initiate the `collect_user_update_task` to gather user input.
+#     4. Combine all inputs into a comprehensive standup update.
+#   expected_output: >
+#     A finalized standup update, integrating:
+#     - GitHub activity
+#     - User-provided updates
+#   agent: chat_manager
 
 fetch_github_activity_task:
   description: >
@@ -17,17 +34,15 @@ fetch_github_activity_task:
     1. Use the `github_activity` tool to gather recent commits, pull requests, and reviews.
     2. Analyze activity to identify accomplishments, ongoing work, and blockers.
   expected_output: >
-    A summary of the user's GitHub activity, including:
-    - Accomplishments
-    - Ongoing work
-    - Identified blockers
+    A summary of the user's GitHub activity
   agent: github_activity_agent
 
 draft_standup_update_task:
   description: >
-    Generate a draft standup update based on the user's input and GitHub activity. Tasks include:
-    1. Integrate user-provided updates with GitHub activity insights.
-    2. Create a structured draft including accomplishments, blockers, and plans.
+    Generate a draft standup update based on existing context results passed in. Tasks include:
+    1. Used the existing context results passed in to create a structured draft of Github activity.
+    2. Use the returned context to generate a draft standup update including accomplishments, blockers, and plans.
+    3. Do this once and return the result.
   expected_output: >
     A well-structured draft of the standup update, including:
     - Key accomplishments

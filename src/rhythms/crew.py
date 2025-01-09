@@ -8,6 +8,7 @@ from .services.mock_github_service import MockGitHubService
 import yaml
 import os
 import logging
+import json
 
 # Configure logging
 logging.basicConfig(
@@ -16,48 +17,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# import requests
-
-# response = requests.post("https://telemetry.crewai.com/v1/traces", verify=False)
-
-class StandupContext(BaseModel):
-    user_id: str
-    timestamp: datetime
-    
-    # Daily Update Components
-    accomplishments: List[str] = Field(default_factory=list)
-    blockers: List[str] = Field(default_factory=list)
-    plans: List[str] = Field(default_factory=list)
-    
-    # Draft and Activity Data
-    message: Optional[str] = None
-    draft: Optional[Dict] = Field(default_factory=dict)
-    github_activity: Optional[Dict] = Field(default_factory=dict)
-    linear_activity: Optional[Dict] = Field(default_factory=dict)
-    
-    # Follow-up tracking
-    needs_followup: bool = False
-    followup_questions: List[str] = Field(default_factory=list)
-    clarification_needed: List[str] = Field(default_factory=list)
-    
-    # Context and History
-    last_update: Optional[datetime] = None
-    sentiment: Optional[str] = None
-    recurring_blockers: List[str] = Field(default_factory=list)
-    completed_items: List[str] = Field(default_factory=list)
-    communication_style: Optional[str] = None
-    writing_style_preference: str = "bullets"
-
-    def to_dict(self):
-        # Convert the object to a dictionary
-        data = self.dict()
-
-        # Format the datetime objects to strings
-        data['timestamp'] = self.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-        if self.last_update:
-            data['last_update'] = self.last_update.strftime("%Y-%m-%d %H:%M:%S") 
-        return data
-
 @CrewBase
 class Rhythms():
     @tool("github_activity")
@@ -65,16 +24,26 @@ class Rhythms():
       """
       Fetches GitHub activity for a given user, including their recent commits, pull requests, and other relevant activity.
       """
-      return {'accomplishments': ["Made 5 commits in last 24 hours in multiple repos"], 'ongoing_work': ["Fix ABC bug in UI"], 'blockers': ["Review 21PRs"]}
+      return json.dumps({'accomplishments': ["Made 5 commits in last 24 hours in multiple repos"], 'ongoing_work': ["Fix ABC bug in UI"], 'blockers': ["Review 21PRs"]})
+
+    # @agent
+    # def chat_manager(self) -> Agent:
+    #     agent = Agent(
+    #       config = self.agents_config['chat_manager'],
+    #         name="Chat Manager",
+    #         verbose=True,
+    #         allow_delegation=True,
+    #         tools=[]
+    #     )
+    #     return agent
 
     @agent
-    def chat_manager(self) -> Agent:
+    def user_update_agent(self) -> Agent:
         agent = Agent(
-          config = self.agents_config['chat_manager'],
-            name="Chat Manager",
+           config = self.agents_config['user_update_agent'],
             verbose=True,
             allow_delegation=True,
-            tools=[]
+            tools=[],
         )
         return agent
 
@@ -83,7 +52,7 @@ class Rhythms():
         agent = Agent(
            config = self.agents_config['github_activity_agent'],
             verbose=True,
-            allow_delegation=False,
+            allow_delegation=True,
             tools=[self.get_github_activity]
         )
         return agent
@@ -93,7 +62,7 @@ class Rhythms():
         agent = Agent(
            config = self.agents_config['draft_agent'],
             verbose=True,
-            allow_delegation=False,  # This agent doesn't delegate further
+            allow_delegation=True,
             tools=[]
         )
         return agent
@@ -104,9 +73,23 @@ class Rhythms():
         logger.info("Creating Collect User Update task")
         task = Task(
             config = self.tasks_config['collect_user_update_task'],
+            context=[self.draft_standup_update(), self.fetch_github_activity()],
+            human_input=True
         )
         logger.info("Collect User Update task created successfully")
         return task
+
+    # @task
+    # def standup_manager_task(self) -> Task:
+    #     """Oversees the entire standup process by coordinating agents and tasks."""
+    #     logger.info("Creating Standup Manager task")
+    #     task = Task(
+    #         config=self.tasks_config['standup_manager_task'],
+    #         human_input=True
+    #     )
+    #     logger.info("Standup Manager task created successfully")
+    #     return task
+
 
     @task
     def fetch_github_activity(self) -> Task:
@@ -124,6 +107,7 @@ class Rhythms():
         logger.info("Creating Draft Standup Update task")
         task = Task(
             config = self.tasks_config['draft_standup_update_task'],
+            context=[self.fetch_github_activity()]
         )
         logger.info("Draft Standup Update task created successfully")
         return task
@@ -134,16 +118,21 @@ class Rhythms():
         logger.info("Creating Standup crew")
         crew = Crew(
             agents=[
+                # self.chat_manager(),
                 self.github_activity_agent(),
-                self.draft_agent()
+                self.draft_agent(),
+                self.user_update_agent()
             ],
             tasks=[
-                self.collect_user_update(),
                 self.fetch_github_activity(),
-                self.draft_standup_update()
+                self.draft_standup_update(),
+                self.collect_user_update(),
+                # self.standup_manager_task()
             ],
-            process=Process.hierarchical,
-            manager_agent=self.chat_manager()
+            process=Process.sequential,
+            memory=True,
+            verbose=True,
+            planning=True
         )
         logger.info("Standup crew created successfully")
         return crew
