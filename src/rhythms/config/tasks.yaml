@@ -24,6 +24,7 @@ collect_user_update_task:
     - Confirmed blockers with context
     - Specific plans for the next day
   agent: user_update_agent
+  human_input: true
 
 fetch_github_activity_task:
   description: >

@@ -1,7 +1,7 @@
 from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
-from crewai.tools import tool
-from typing import Dict, List, Optional, Union
+from crewai.tools import tool, BaseTool
+from typing import Dict, List, Optional, Union, Callable
 from datetime import datetime
 import logging
 from src.rhythms.services.github_service import GitHubService
@@ -13,6 +13,21 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+class SlackInputTool(BaseTool):
+    name: str = "get_slack_input"
+    description: str = "Gets input from the user through Slack."
+    slack_interaction_callback: Optional[Callable[[str], str]] = None
+
+    def __init__(self, slack_interaction_callback: Optional[Callable[[str], str]] = None):
+        super().__init__()
+        self.slack_interaction_callback = slack_interaction_callback
+
+    def _run(self, prompt: str) -> str:
+        logger.info(f"Running SlackInputTool with prompt: {prompt}")
+        if self.slack_interaction_callback:
+            return self.slack_interaction_callback(prompt)
+        return "No Slack interaction callback configured"
 
 @CrewBase
 class Rhythms():
@@ -74,11 +89,12 @@ class Rhythms():
     @agent
     def user_update_agent(self) -> Agent:
         """Expert facilitator for gathering standup updates."""
+        slack_tool = SlackInputTool(self.slack_interaction_callback)
         return Agent(
             config=self.agents_config['user_update_agent'],
             verbose=True,
             allow_delegation=False,
-            tools=[],
+            tools=[slack_tool],
             step_callback=lambda msg: self._handle_output(msg, "user_update_agent")
         )
 
@@ -110,11 +126,9 @@ class Rhythms():
         task = Task(
             config=self.tasks_config['collect_user_update_task'],
             context=[self.draft_standup_update()],
-            human_input=True,
-            human_input_callback=self.slack_interaction_callback,
             step_callback=lambda msg: self._handle_output(msg, "user_update_agent"),
             output_file="final_standup.md",
-            timeout=300  # Add 5-minute timeout
+            timeout=300
         )
         logger.info("Collect User Update task created successfully")
         return task
@@ -136,7 +150,7 @@ class Rhythms():
             ],
             process=Process.sequential,
             memory=True,
-            verbose=True
+            verbose=True,
         )
         logger.info("Standup crew created successfully")
         return crew

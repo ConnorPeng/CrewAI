@@ -81,6 +81,7 @@ class SlackBot:
                     
                     # Check if this is a response we're waiting for
                     key = (channel_id, user_id)
+                    logger.info(f"connor debugging 2: Checking if {key} is in user_responses")
                     if key in self.user_responses:
                         logger.info(f"Found waiting response queue for {key}")
                         try:
@@ -150,9 +151,17 @@ class SlackBot:
                 def output_callback(message):
                     """Callback for CrewAI output"""
                     logger.info(f"Received message from CrewAI: {message} type: {type(message)}")
-                    if message and isinstance(message, (str, dict)):
-                        logger.info(f"Sending final connor message to Slack: {str(message)} channel_id: {channel_id} thread_ts: {thread_ts}")
-                        self._send_to_slack(channel_id, str(message), thread_ts)
+                    if not message:
+                        return
+                        
+                    # Format the message for Slack
+                    if isinstance(message, dict):
+                        formatted_message = self._format_dict_for_slack(message)
+                    else:
+                        formatted_message = str(message)
+                        
+                    logger.info(f"Sending formatted message to Slack: {formatted_message}")
+                    self._send_to_slack(channel_id, formatted_message, thread_ts)
 
                 # Initialize Rhythms with callbacks
                 rhythms = Rhythms(
@@ -167,9 +176,10 @@ class SlackBot:
 
                 # Send the final standup result
                 if result:
+                    formatted_result = self._format_dict_for_slack(result) if isinstance(result, dict) else str(result)
                     self._send_to_slack(
                         channel_id,
-                        f"Final Standup Summary:\n```\n{result}\n```",
+                        f"Here's your standup summary:\n{formatted_result}",
                         thread_ts
                     )
 
@@ -181,11 +191,50 @@ class SlackBot:
                     thread_ts
                 )
 
+    def _format_dict_for_slack(self, data: Dict) -> str:
+        """Format a dictionary into a readable Slack message."""
+        if not isinstance(data, dict):
+            return str(data)
+            
+        formatted_sections = []
+        
+        # Handle GitHub activity data
+        if "completed_work" in data:
+            if data["completed_work"]:
+                formatted_sections.append("*:white_check_mark: Completed Work:*")
+                for item in data["completed_work"]:
+                    formatted_sections.append(f"• {item}")
+            
+        if "work_in_progress" in data:
+            if data["work_in_progress"]:
+                formatted_sections.append("\n*:construction: Work in Progress:*")
+                for item in data["work_in_progress"]:
+                    formatted_sections.append(f"• {item}")
+            
+        if "potential_blockers" in data:
+            if data["potential_blockers"]:
+                formatted_sections.append("\n*:warning: Potential Blockers:*")
+                for item in data["potential_blockers"]:
+                    formatted_sections.append(f"• {item}")
+                    
+        # If no data in standard categories, format generically
+        if not formatted_sections:
+            for key, value in data.items():
+                formatted_key = key.replace("_", " ").title()
+                if isinstance(value, list):
+                    formatted_sections.append(f"*{formatted_key}:*")
+                    for item in value:
+                        formatted_sections.append(f"• {item}")
+                else:
+                    formatted_sections.append(f"*{formatted_key}:* {value}")
+                    
+        return "\n".join(formatted_sections) if formatted_sections else "No data to display"
+
     def _get_user_input(self, channel_id: str, user_id: str, prompt: str, thread_ts: str) -> str:
         """Get user input from Slack with a timeout."""
         import threading
         from queue import Queue
-        
+        logger.info(f"connor debugging 1: Getting user input for {user_id} in channel {channel_id}")
         # Create a new response queue for this request
         response_queue = Queue()
         key = (channel_id, user_id)
@@ -203,11 +252,35 @@ class SlackBot:
         self.user_responses[key] = response_queue
         logger.info(f"Created new response queue for {key}")
 
+        # Format the prompt for better readability
+        formatted_prompt = (
+            f"<@{user_id}> {prompt}\n"
+            "Please respond in this thread. Your response will be used to update your standup summary."
+        )
+
         # Send the prompt to the user
         self.client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,
-            text=f"<@{user_id}> {prompt}"
+            text=formatted_prompt,
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": formatted_prompt
+                    }
+                },
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": "💡 _Type your response below. Be as detailed as you'd like._"
+                        }
+                    ]
+                }
+            ]
         )
         logger.info(f"Sent prompt to user {user_id} in channel {channel_id}")
 
@@ -216,10 +289,31 @@ class SlackBot:
             logger.info(f"Waiting for response from {key}")
             response = response_queue.get(timeout=300)  # 5 minute timeout
             logger.info(f"Received response from {key}: {response}")
+            
+            # Acknowledge receipt of response
+            self.client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text="✅ Got your response! Processing and updating your standup summary..."
+            )
+            
             return response
         except Exception as e:
-            logger.error(f"Error getting response: {str(e)}")
-            return "No response received within timeout period."
+            error_msg = str(e)
+            logger.error(f"Error getting response: {error_msg}")
+            
+            # Send a more helpful error message based on the type of error
+            if "timeout" in error_msg.lower():
+                error_response = "⚠️ No response received within the time limit. Please try the standup command again."
+            else:
+                error_response = "❌ There was an error processing your response. Please try the standup command again."
+                
+            self.client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=error_response
+            )
+            return "No response received"
         finally:
             # Always clean up
             if key in self.user_responses:
