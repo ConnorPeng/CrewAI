@@ -35,8 +35,10 @@ class Rhythms():
         super().__init__()
         self.slack_interaction_callback = slack_interaction_callback
         self.slack_output_callback = slack_output_callback
-        # Disable default printing to terminal
-        logging.getLogger('crewai').setLevel(logging.WARNING)
+        # Disable default printing to terminal more aggressively
+        logging.getLogger('crewai').setLevel(logging.ERROR)
+        logging.getLogger('langchain').setLevel(logging.ERROR)
+        logging.getLogger('openai').setLevel(logging.ERROR)
 
     def _handle_output(self, message: Union[str, AgentFinish], agent_name: Optional[str] = None) -> None:
         """Handle output by sending to Slack if callback exists."""

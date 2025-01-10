@@ -1,42 +1,48 @@
+fetch_github_activity_task:
+  description: >
+    Collect and categorize recent GitHub activity by:
+    1. Fetching concrete GitHub data from the last 24 hours
+    2. Categorizing only verified activities:
+       - Merged PRs and closed issues as completed work
+       - Open PRs and active issues as work in progress
+       - Issues marked as blocking or stalled PRs as blockers
+    3. Including direct links to all referenced items
+  expected_output: >
+    A structured JSON containing only verified GitHub activities:
+    - completed_work: [{title, url, type, timestamp}]
+    - work_in_progress: [{title, url, type, status, last_updated}]
+    - blockers: [{title, url, type, reason}]
+  agent: github_activity_agent
+
 draft_standup_update_task:
   description: >
-    Create an initial standup draft using GitHub data by:
-    1. Structuring the GitHub activity into a standup format
-    2. Highlighting key accomplishments and blockers
-    3. Identifying apparent ongoing work
+    Create a structured standup draft using only verified GitHub data by:
+    1. Converting the GitHub activity JSON into a clear standup format
+    2. Using bullet points for each item with links
+    3. Marking items that need user verification with [?]
+    4. Not adding any speculative content
   expected_output: >
-    A markdown-formatted draft with sections:
-    - Accomplishments
-    - Blockers
-    - Plans
+    A markdown-formatted draft with:
+    - Accomplishments: Bullet points of completed work with links
+    - Blockers: List of identified blocking issues
+    - Plans: List of in-progress work
+    Each section should only contain items from GitHub data
   agent: draft_agent
 
 collect_user_update_task:
   description: >
-    Refine the standup draft through user interaction by:
-    1. Presenting the draft standup
-    2. Asking for additional items not found in GitHub
-    3. Requesting clarification on unclear items
-    4. Confirming the completeness of all sections
+    Validate and finalize the standup draft through focused user interaction:
+    1. Present the current draft clearly
+    2. Ask for specific corrections or additions
+    3. If user expresses satisfaction (e.g., "looks good", "that's correct"), 
+       conclude immediately
+    4. Otherwise, ask targeted questions about unclear [?] items
+    5. Limit to max 3 interactions
   expected_output: >
-    A final markdown-formatted standup update that includes:
-    - Verified accomplishments
-    - Confirmed blockers with context
-    - Specific plans for the next day
+    A final markdown-formatted standup with:
+    - User-verified accomplishments with links
+    - Confirmed or added blockers
+    - Specific, user-confirmed plans
+    All content must come from either GitHub data or direct user input
   agent: user_update_agent
   human_input: true
-
-fetch_github_activity_task:
-  description: >
-    Fetch and analyze recent GitHub activity by:
-    1. Using the GitHub activity tool to gather recent activity
-    2. Analyzing and categorizing activities into:
-       - Completed work (merged PRs, closed issues)
-       - Work in progress (open PRs, active issues)
-       - Potential blockers (stalled PRs, blocking issues)
-  expected_output: >
-    A structured JSON summary containing:
-    - completed_work: a list of completed items with links
-    - work_in_progress: a list of ongoing items with status
-    - potential_blockers: a list of items needing attention
-  agent: github_activity_agent

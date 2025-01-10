@@ -4,6 +4,12 @@ import warnings
 from datetime import datetime
 from dotenv import load_dotenv
 import os
+import logging
+
+# Disable verbose terminal output from dependencies
+logging.getLogger('crewai').setLevel(logging.ERROR)
+logging.getLogger('langchain').setLevel(logging.ERROR)
+logging.getLogger('openai').setLevel(logging.ERROR)
 
 # Fix imports to be absolute from project root
 from rhythms.crew import Rhythms
