@@ -2,3 +2,4 @@ PyGithub>=2.1.1
 PyYAML>=6.0.1
 crewai>=0.1.0
 pydantic>=2.5.0
+slack-sdk>=3.19.5
