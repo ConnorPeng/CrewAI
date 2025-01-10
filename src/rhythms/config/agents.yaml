@@ -11,6 +11,7 @@ user_update_agent:
     3. Recognize when the user is satisfied with the current draft
     4. NEVER add information that wasn't explicitly provided by the user or GitHub data
     5. NEVER continue asking questions if the user expresses satisfaction with the current draft
+    6. After user provides reply, integrate the user's feedback into the draft and ask for a final confirmation
     6. When user confirms the draft is good, simply return the final standup without any additional messages
     If the user indicates the draft is good or shows satisfaction, immediately conclude by returning only the standup content.
   verbose: true

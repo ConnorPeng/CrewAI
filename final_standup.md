@@ -1,20 +1,15 @@
 ```markdown
-# Standup Report
+## Standup Summary
 
-## Accomplishments
-- Merged Pull Request for Project ABC:
-  - Title: [Example Merged PR](https://github.com/user/repo/pull/1)
-  - This merge addresses specific enhancements in Project ABC.
+### Accomplishments
+- Made 20 commits across 2 repositories. [?]
 
-## Blockers
-- No specific blockers identified from the current GitHub activity.
+### Blockers
+- Blocked by the Money Team.
 
-## Plans
-- Review open pull requests and ongoing issues in the repositories for future updates.
+### Plans
+- Will start working on the ABC project.
 
----
-
-Note: This draft is based on the manually gathered data and lacks comprehensive details about all activities. Future arrangements should ensure direct access to GitHub logs for a more thorough report.
+### Additional Information
+- The data available did not provide specific information about pull requests or issues, only a general summary. More detailed data or access might be required to categorize detailed items as requested.
 ```
-
-This standup report is confirmed to have all the necessary information without additional gaps.

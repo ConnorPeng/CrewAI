@@ -35,14 +35,13 @@ collect_user_update_task:
     1. Present the current draft clearly
     2. Ask for specific corrections or additions
     3. If user expresses satisfaction (e.g., "looks good", "that's correct"), 
-       return only the final standup content without any confirmation messages
+       conclude immediately
     4. Otherwise, ask targeted questions about unclear [?] items
     5. Limit to max 3 interactions
   expected_output: >
-    A final markdown-formatted standup without any additional messages or confirmations:
-    - Accomplishments section
-    - Blockers section
-    - Plans section
-    - Additional Information section if needed
+    A final markdown-formatted standup with:
+    - User-verified accomplishments with links
+    - Confirmed or added blockers
+    - Specific, user-confirmed plans
+    All content must come from either GitHub data or direct user input
   agent: user_update_agent
-  human_input: true

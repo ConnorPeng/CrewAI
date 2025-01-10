@@ -75,7 +75,6 @@ class Rhythms():
             verbose=True,
             allow_delegation=False,
             tools=[self.get_github_activity],
-            step_callback=lambda msg: self._handle_output(msg, "user_update_agent")
         )
 
     @agent
