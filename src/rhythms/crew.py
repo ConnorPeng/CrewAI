@@ -1,10 +1,11 @@
 from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
 from crewai.tools import tool
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 from datetime import datetime
 import logging
 from src.rhythms.services.github_service import GitHubService
+from crewai.agents.parser import AgentFinish
 
 # Configure logging
 logging.basicConfig(
@@ -15,13 +16,38 @@ logger = logging.getLogger(__name__)
 
 @CrewBase
 class Rhythms():
+    def __init__(self, slack_interaction_callback=None, slack_output_callback=None):
+        super().__init__()
+        self.slack_interaction_callback = slack_interaction_callback
+        self.slack_output_callback = slack_output_callback
+        # Disable default printing to terminal
+        logging.getLogger('crewai').setLevel(logging.WARNING)
+
+    def _handle_output(self, message: Union[str, AgentFinish], agent_name: Optional[str] = None) -> None:
+        """Handle output by sending to Slack if callback exists."""
+        # Add guard against None messages
+        if message is None:
+            return
+        
+        try:
+            if isinstance(message, AgentFinish):
+                output_text = message.output
+                logger.info(f"Handling AgentFinish output from {agent_name}: {output_text}")
+                if self.slack_output_callback:
+                    self.slack_output_callback(output_text)
+            elif isinstance(message, str):
+                logger.info(f"Handling string output from {agent_name}: {message}")
+                if self.slack_output_callback:
+                    self.slack_output_callback(message)
+        except Exception as e:
+            logger.error(f"Error in _handle_output: {str(e)}")
+
     @tool("github_activity")
     def get_github_activity() -> Dict:
         """Fetches GitHub activity for a given user using a personal access token."""
         github_service = GitHubService()
         activity = github_service.get_user_activity("ConnorPeng", 5)
         summary = github_service.summarize_activity(activity)
-        print("github summary", summary)
         return summary
 
     @agent
@@ -31,7 +57,8 @@ class Rhythms():
             config=self.agents_config['github_activity_agent'],
             verbose=True,
             allow_delegation=False,
-            tools=[self.get_github_activity]
+            tools=[self.get_github_activity],
+            step_callback=lambda msg: self._handle_output(msg, "user_update_agent")
         )
 
     @agent
@@ -41,7 +68,7 @@ class Rhythms():
             config=self.agents_config['draft_agent'],
             verbose=True,
             allow_delegation=True,
-            tools=[]
+            tools=[],
         )
 
     @agent
@@ -52,6 +79,7 @@ class Rhythms():
             verbose=True,
             allow_delegation=False,
             tools=[],
+            step_callback=lambda msg: self._handle_output(msg, "user_update_agent")
         )
 
     @task
@@ -83,7 +111,10 @@ class Rhythms():
             config=self.tasks_config['collect_user_update_task'],
             context=[self.draft_standup_update()],
             human_input=True,
-            output_file="final_standup.md"
+            human_input_callback=self.slack_interaction_callback,
+            step_callback=lambda msg: self._handle_output(msg, "user_update_agent"),
+            output_file="final_standup.md",
+            timeout=300  # Add 5-minute timeout
         )
         logger.info("Collect User Update task created successfully")
         return task

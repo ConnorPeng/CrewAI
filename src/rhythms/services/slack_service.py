@@ -42,6 +42,7 @@ class SlackBot:
         )
         
         self.event_counter = 0
+        self.user_responses = {}  # Add this to store pending user responses
         
         # Set up message handler
         self._setup_handler()
@@ -50,18 +51,43 @@ class SlackBot:
     def _setup_handler(self) -> None:
         """Setup the socket mode event handler."""
         def socket_handler(client: SocketModeClient, req: SocketModeRequest) -> None:
-            event = req.payload.get("event", {})
-            event_type = event.get("type")
-            if req.type == "events_api" and event_type == "app_mention":
-                self.event_counter += 1
-                logger.info(f"Received Slack command #{self.event_counter}: {req.payload}")
-
-                # Acknowledge the command immediately
+            if req.type == "events_api":
+                event = req.payload.get("event", {})
+                event_type = event.get("type")
+                
+                # Always acknowledge the request first
                 response = SocketModeResponse(envelope_id=req.envelope_id)
                 client.send_socket_mode_response(response)
-
-                self._handle_standup_command(event)
-        
+                
+                # Handle app mentions (standup command)
+                if event_type == "app_mention":
+                    self.event_counter += 1
+                    logger.info(f"Received Slack command #{self.event_counter}: {req.payload}")
+                    self._handle_standup_command(event)
+                
+                # Handle message responses in threads
+                elif event_type == "message":
+                    channel_id = event.get("channel")
+                    user_id = event.get("user")
+                    thread_ts = event.get("thread_ts")
+                    bot_id = event.get("bot_id")
+                    
+                    # Ignore bot messages and messages not in threads
+                    if bot_id or not thread_ts:
+                        return
+                        
+                    text = event.get("text", "").strip()
+                    logger.info(f"Received thread message from {user_id} in {channel_id}: {text}")
+                    
+                    # Check if this is a response we're waiting for
+                    key = (channel_id, user_id)
+                    if key in self.user_responses:
+                        logger.info(f"Found waiting response queue for {key}")
+                        try:
+                            self.user_responses[key].put(text)
+                            logger.info(f"Successfully put response in queue for {key}")
+                        except Exception as e:
+                            logger.error(f"Error putting response in queue: {str(e)}")
 
         self.socket_client.socket_mode_request_listeners.append(socket_handler)
         logger.info("Socket handler setup complete")
@@ -106,37 +132,127 @@ class SlackBot:
             )
 
     def _handle_standup_command(self, event: Dict[str, Any]) -> None:
-        """Handle the /standup command."""
+        """Handle the standup command."""
         channel_id = event["channel"]
         user_id = event["user"]
-        bot_id = event.get("bot_id")
         text = event.get("text", "").strip()
-        logger.info(f"Received message from {user_id}: {text}")
+        thread_ts = None
+        
         if "standup" in text.lower():
             try:
-                # Send initial response
-                self.client.chat_postMessage(
+                # Start a new thread for this standup
+                response = self.client.chat_postMessage(
                     channel=channel_id,
-                    text=f"Starting standup process for <@{user_id}>... 🚀"
+                    text=f"Starting standup process for <@{user_id}>... 🚀\nI'll gather your GitHub activity and help create your standup update."
                 )
+                thread_ts = response['ts']
 
-                # Initialize and run the Rhythms crew
-                rhythms = Rhythms()
+                def output_callback(message):
+                    """Callback for CrewAI output"""
+                    logger.info(f"Received message from CrewAI: {message} type: {type(message)}")
+                    if message and isinstance(message, (str, dict)):
+                        logger.info(f"Sending final connor message to Slack: {str(message)} channel_id: {channel_id} thread_ts: {thread_ts}")
+                        self._send_to_slack(channel_id, str(message), thread_ts)
+
+                # Initialize Rhythms with callbacks
+                rhythms = Rhythms(
+                    slack_interaction_callback=lambda prompt: self._get_user_input(
+                        channel_id, user_id, prompt, thread_ts
+                    ),
+                    slack_output_callback=output_callback
+                )
+                
                 standup_crew = rhythms.standup_crew()
                 result = standup_crew.kickoff()
 
-                # Send the standup result back to Slack
-                self.client.chat_postMessage(
-                    channel=channel_id,
-                    text=f"Standup Summary:\n```\n{result}\n```"
-                )
+                # Send the final standup result
+                if result:
+                    self._send_to_slack(
+                        channel_id,
+                        f"Final Standup Summary:\n```\n{result}\n```",
+                        thread_ts
+                    )
 
             except Exception as e:
                 logger.error(f"Error running standup: {str(e)}")
+                self._send_to_slack(
+                    channel_id,
+                    "Sorry, I encountered an error while running the standup. Please try again.",
+                    thread_ts
+                )
+
+    def _get_user_input(self, channel_id: str, user_id: str, prompt: str, thread_ts: str) -> str:
+        """Get user input from Slack with a timeout."""
+        import threading
+        from queue import Queue
+        
+        # Create a new response queue for this request
+        response_queue = Queue()
+        key = (channel_id, user_id)
+        
+        # Clear any existing queue for this user
+        if key in self.user_responses:
+            old_queue = self.user_responses[key]
+            try:
+                # Clear the old queue
+                while not old_queue.empty():
+                    old_queue.get_nowait()
+            except:
+                pass
+        
+        self.user_responses[key] = response_queue
+        logger.info(f"Created new response queue for {key}")
+
+        # Send the prompt to the user
+        self.client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=f"<@{user_id}> {prompt}"
+        )
+        logger.info(f"Sent prompt to user {user_id} in channel {channel_id}")
+
+        # Wait for response with timeout
+        try:
+            logger.info(f"Waiting for response from {key}")
+            response = response_queue.get(timeout=300)  # 5 minute timeout
+            logger.info(f"Received response from {key}: {response}")
+            return response
+        except Exception as e:
+            logger.error(f"Error getting response: {str(e)}")
+            return "No response received within timeout period."
+        finally:
+            # Always clean up
+            if key in self.user_responses:
+                del self.user_responses[key]
+                logger.info(f"Cleaned up response queue for {key}")
+
+    def _send_to_slack(self, channel_id: str, message: str, thread_ts: str) -> None:
+        """Send a message to Slack channel in thread."""
+        try:
+            # Clean up the message
+            message = str(message).strip()
+            if not message:
+                return
+            
+            # Split long messages
+            max_length = 3000
+            messages = [message[i:i + max_length] for i in range(0, len(message), max_length)]
+            
+            for msg in messages:
+                # Format code blocks properly
+                if '```' in msg:
+                    msg = f"```\n{msg.replace('```', '')}\n```"
+                
                 self.client.chat_postMessage(
                     channel=channel_id,
-                    text="Sorry, I encountered an error while running the standup. Please try again."
+                    thread_ts=thread_ts,
+                    text=msg,
+                    unfurl_links=False,
+                    unfurl_media=False
                 )
+            
+        except Exception as e:
+            logger.error(f"Error sending message to Slack: {str(e)}")
 
     def start(self) -> None:
         """Start the Slack bot."""
