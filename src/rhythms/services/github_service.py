@@ -4,10 +4,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from github import Github, GithubException
 import yaml
+from dotenv import load_dotenv
 
 class GitHubService:
     def __init__(self):
         """Initialize GitHub service with configuration"""
+        load_dotenv()
         self.config = self._load_config()
         self.client = self._init_client()
         
@@ -22,21 +24,27 @@ class GitHubService:
     
     def _init_client(self) -> Github:
         """Initialize GitHub client with token from environment"""
-        token = self.config['token_env_var']
-        print("config path", self.config)
+        token_env_var = self.config['token_env_var']
+        token = os.getenv(token_env_var)
         if not token:
-            raise ValueError(f"GitHub token not found in environment variable {self.config['token_env_var']}")
+            raise ValueError(f"GitHub token not found in environment variable {token_env_var}")
         return Github(token)
     
-    def get_user_activity(self, username: str, days: int = None) -> Dict:
-    
+    def get_user_activity(self, username: str = None, days: int = None) -> Dict:
+        """Get GitHub activity for a user over specified number of days"""
+        if username is None:
+            username = os.getenv('GITHUB_USERNAME')
+            if not username:
+                raise ValueError("GitHub username not found in environment variables")
+            
         if days is None:
             days = self.config['activity_lookback_days']
             
         since = datetime.now(timezone.utc) - timedelta(days=days)
         
         try:
-            user = self.client.get_user("ConnorPeng")
+            user = self.client.get_user(username)
+            print("github user", user)
             activity = {
                 'commits': [],
                 'pull_requests': [],

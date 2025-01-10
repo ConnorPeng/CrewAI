@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 @CrewBase
 class Rhythms():
     @tool("github_activity")
-    def get_github_activity(user_id: str) -> Dict:
+    def get_github_activity() -> Dict:
         """Fetches GitHub activity for a given user using a personal access token."""
         github_service = GitHubService()
-        activity = github_service.get_user_activity(user_id, 5)
+        activity = github_service.get_user_activity("ConnorPeng", 5)
         summary = github_service.summarize_activity(activity)
         print("github summary", summary)
         return summary

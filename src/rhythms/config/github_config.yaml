@@ -1,6 +1,6 @@
 github:
   # Token will be loaded from environment variable GITHUB_TOKEN
-  token_env_var: "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"
+  token_env_var: "GITHUB_TOKEN"
   api_version: "2022-11-28"
   # Default number of days to look back for activity
   activity_lookback_days: 2
