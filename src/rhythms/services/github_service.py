@@ -44,7 +44,6 @@ class GitHubService:
         
         try:
             user = self.client.get_user(username)
-            print("github user", user)
             activity = {
                 'commits': [],
                 'pull_requests': [],
@@ -58,7 +57,7 @@ class GitHubService:
             
             for repo in repos:
                 try:
-                    print(f"Processing repo: {repo}")
+                    print(f"Processing repo: {repo.full_name}")
                     
                     # Get commits with error handling
                     if 'commits' in self.config['activity_types']:
@@ -66,10 +65,11 @@ class GitHubService:
                             commits = list(repo.get_commits(author=username, since=since))
                             for commit in commits[:self.config['max_items_per_type']]:
                                 activity['commits'].append({
-                                    'repo': repo.full_name,  # Using full_name instead of name
+                                    'repo': repo.full_name,
                                     'sha': commit.sha,
                                     'message': commit.commit.message,
-                                    'date': commit.commit.author.date.isoformat()
+                                    'date': commit.commit.author.date.isoformat(),
+                                    'url': commit.html_url
                                 })
                         except GithubException as e:
                             print(f"Error fetching commits for {repo.full_name}: {str(e)}")
@@ -86,12 +86,31 @@ class GitHubService:
                                         'number': pr.number,
                                         'title': pr.title,
                                         'state': pr.state,
-                                        'date': pr.created_at.isoformat()
+                                        'date': pr.created_at.isoformat(),
+                                        'url': pr.html_url,
+                                        'labels': [label.name for label in pr.labels]
                                     })
                         except GithubException as e:
                             print(f"Error fetching PRs for {repo.full_name}: {str(e)}")
                     
-                    # Similar error handling for reviews and issues...
+                    # Get issues
+                    if 'issues' in self.config['activity_types']:
+                        try:
+                            issues = list(repo.get_issues(state='all'))
+                            user_issues = [issue for issue in issues if issue.user and issue.user.login == username]
+                            for issue in user_issues[:self.config['max_items_per_type']]:
+                                if issue.created_at >= since:
+                                    activity['issues'].append({
+                                        'repo': repo.full_name,
+                                        'number': issue.number,
+                                        'title': issue.title,
+                                        'state': issue.state,
+                                        'date': issue.created_at.isoformat(),
+                                        'url': issue.html_url,
+                                        'labels': [label.name for label in issue.labels]
+                                    })
+                        except GithubException as e:
+                            print(f"Error fetching issues for {repo.full_name}: {str(e)}")
                     
                 except GithubException as e:
                     print(f"Error processing repository {repo.full_name}: {str(e)}")
@@ -104,55 +123,47 @@ class GitHubService:
 
     def summarize_activity(self, activity: Dict) -> Dict:
         """
-        Summarize GitHub activity into a format suitable for standup
-        
-        Args:
-            activity (Dict): Raw activity data from get_user_activity
-            
-        Returns:
-            Dict containing summarized activity suitable for standup
+        Summarize the raw activity data into a more digestible format.
+        Returns a dictionary with completed_work, work_in_progress, and blockers lists.
         """
-        summary = {
-            'accomplishments': [],
-            'ongoing_work': [],
-            'blockers': []
-        }
-        
-        # Process commits
-        if activity['commits']:
-            commit_summary = f"Made {len(activity['commits'])} commits"
-            repos = set(c['repo'] for c in activity['commits'])
-            if len(repos) == 1:
-                commit_summary += f" in {repos.pop()}"
-            elif len(repos) > 1:
-                commit_summary += f" across {len(repos)} repositories"
-            summary['accomplishments'].append(commit_summary)
-        
+        completed = []
+        in_progress = []
+        blockers = []
+
+        # Process commits by repository
+        commits_by_repo = {}
+        for commit in activity.get('commits', []):
+            repo = commit['repo']
+            if repo not in commits_by_repo:
+                commits_by_repo[repo] = []
+            commits_by_repo[repo].append(commit)
+
+        for repo, commits in commits_by_repo.items():
+            commit_messages = [f"- {commit['message']}" for commit in commits]
+            completed.append(
+                f"Made {len(commits)} commits in {repo}:\n" + "\n".join(commit_messages)
+            )
+
         # Process pull requests
-        open_prs = [pr for pr in activity['pull_requests'] if pr['state'] == 'open']
-        if open_prs:
-            summary['ongoing_work'].append(
-                f"Working on {len(open_prs)} open pull requests"
-            )
-        
-        merged_prs = [pr for pr in activity['pull_requests'] if pr['state'] == 'closed']
-        if merged_prs:
-            summary['accomplishments'].append(
-                f"Merged {len(merged_prs)} pull requests"
-            )
-        
-        # Process reviews
-        if activity['reviews']:
-            summary['accomplishments'].append(
-                f"Reviewed {len(activity['reviews'])} pull requests"
-            )
-        
+        for pr in activity.get('pull_requests', []):
+            pr_info = f"{pr['title']} ({pr['repo']}#{pr['number']}) [{pr.get('url', '')}]"
+            if pr['state'] == 'closed':
+                completed.append(f"Merged PR: {pr_info}")
+            else:
+                in_progress.append(f"Working on PR: {pr_info}")
+
         # Process issues
-        open_issues = [i for i in activity['issues'] if i['state'] == 'open']
-        if open_issues:
-            summary['blockers'].extend(
-                f"Open issue: {i['title']} ({i['repo']}#{i['number']})"
-                for i in open_issues
-            )
-        
-        return summary
+        for issue in activity.get('issues', []):
+            issue_info = f"{issue['title']} ({issue['repo']}#{issue.get('number', '')}) [{issue.get('url', '')}]"
+            if issue.get('state') == 'closed':
+                completed.append(f"Closed issue: {issue_info}")
+            elif issue.get('labels', []) and any(label.lower() in ['blocked', 'blocker'] for label in issue['labels']):
+                blockers.append(f"Blocked: {issue_info}")
+            else:
+                in_progress.append(f"Active issue: {issue_info}")
+
+        return {
+            "completed": completed,
+            "in_progress": in_progress,
+            "blockers": blockers
+        }

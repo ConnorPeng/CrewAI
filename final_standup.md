@@ -1,12 +1,16 @@
+FINAL STANDUP:
 ```markdown
-## Standup Summary
+# Standup Summary
 
-### Accomplishments
-- Made 16 commits across 2 repositories. Started working on Project ABC.
+## Accomplishments
+- Made 3 commits in [ConnorPeng/CrewAI](https://github.com/ConnorPeng/CrewAI):
+  - Update
+  - update
+  - update
 
-### Blockers
-- None. The blocker from M10N team has been resolved.
+## Blockers
+- Being blocked by XYZ team.
 
-### Plans
-- Continue work on Project ABC this week.
+## Plans
+- Continue work on Project ABC this week. Previous plan status: In progress.
 ```

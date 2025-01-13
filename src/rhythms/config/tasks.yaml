@@ -1,34 +1,52 @@
 fetch_github_activity_task:
   description: >
     Collect and categorize recent GitHub activity by:
-    1. Fetching concrete GitHub data from the last 24 hours
+    1. Fetching concrete GitHub data from the last 24 hours using the github_activity tool
+    2. Using the EXACT output from the tool in the response
+    3. Do not modify or filter the data received from the tool
+    4. Return the data in the same structure as received:
+       - completed_work: List of completed activities with details
+       - work_in_progress: List of in-progress activities with details
+       - blockers: List of blocking issues with details
+  expected_output: >
+    The structured JSON output from the github_activity tool containing:
+    - completed_work: [{detailed activity info with commit messages, PR details, etc.}]
+    - work_in_progress: [{detailed activity info with PR and issue details}]
+    - blockers: [{detailed blocker info with issue details}]
+    Do not modify or summarize the tool output. Return it exactly as received.
+  agent: github_activity_agent
+
+fetch_linear_activity_task:
+  description: >
+    Collect and categorize recent Linear activity by:
+    1. Fetching concrete Linear data from the last 24 hours
     2. Categorizing only verified activities:
-       - Merged PRs and closed issues as completed work
-       - Open PRs and active issues as work in progress
-       - Issues marked as blocking or stalled PRs as blockers
+       - Completed issues as completed work
+       - In-progress issues as work in progress
+       - Blocked or on-hold issues as blockers
     3. Including direct links to all referenced items
   expected_output: >
-    A structured JSON containing only verified GitHub activities:
+    A structured JSON containing only verified Linear activities:
     - completed_work: [{title, url, type, timestamp}]
     - work_in_progress: [{title, url, type, status, last_updated}]
     - blockers: [{title, url, type, reason}]
-  agent: github_activity_agent
+  agent: linear_activity_agent
 
 draft_standup_update_task:
   description: >
-    Create a structured standup draft using GitHub data and memory context by:
-    1. Converting the GitHub activity JSON into a clear standup format
+    Create a structured standup draft using GitHub data, Linear data, and memory context by:
+    1. Converting the GitHub and Linear activity JSON into a clear standup format
     2. If there are previous plans or blockers in memory, check their status
        and incorporate relevant updates into today's sections
     3. Using bullet points for each item with links
     4. Marking items that need user verification with [?]
     5. Not adding any speculative content
   expected_output: >
-    A well formatted draft with three main sections:
+    A markdown-formatted draft with three main sections:
     - Accomplishments: Bullet points of completed work with links
     - Blockers: List of current blocking issues
     - Plans: List of in-progress work and new plans
-    Each section should only contain items from GitHub data or memory
+    Each section should only contain items from GitHub data, Linear data, or memory
   agent: draft_agent
 
 collect_user_update_task:
@@ -38,17 +56,34 @@ collect_user_update_task:
        - Accomplishments
        - Blockers
        - Plans
-    2. If there are previous unresolved blockers or plans in memory,
-       ask about their status in a natural way with context from memory
-    3. Ask for specific corrections or additions
-    4. If user expresses satisfaction (e.g., "looks good", "that's correct"), 
-       conclude immediately
-    5. Otherwise, ask targeted questions about unclear [?] items
-    6. Limit to max 3 interactions
+    2. Never add information that wasn't explicitly provided
+    3. MUST use get_slack_input tool for ALL user interactions:
+       - First call: get_slack_input with draft and request for feedback
+       - After updates: get_slack_input with updated draft for confirmation
+       - Never proceed without getting response from get_slack_input
+    4. If there are previous unresolved blockers or plans in memory,
+       include questions about their status in the get_slack_input prompt
+    5. Process the response from get_slack_input before proceeding
+    6. Only mark as final after explicit confirmation via get_slack_input
+    7. Prefix final standup with "FINAL STANDUP:" to indicate completion
+    8. Limit to max 3 interactions
+
+    Required tool usage:
+    - MUST use get_slack_input for every user interaction
+    - MUST wait for response from get_slack_input before proceeding
+    - MUST NOT finalize without confirmation from get_slack_input
+
+    Interaction flow:
+    1. get_slack_input(draft + feedback request) -> wait for response
+    2. get_slack_input(updated draft + confirmation) -> wait for response
+    3. Only when confirmed via get_slack_input -> return final version
   expected_output: >
-    A final markdown-formatted standup with three sections:
-    - Accomplishments: User-verified completed work with links
-    - Blockers: Current blocking issues
-    - Plans: Specific, user-confirmed plans
-    All content must come from either GitHub data, memory context, or direct user input
+    The output should be either:
+    1. A call to get_slack_input with the current draft and request for feedback
+    2. A call to get_slack_input with updated draft and request for confirmation
+    3. The final standup (only after confirmation via get_slack_input) prefixed with "FINAL STANDUP:"
+       containing three sections:
+       - Accomplishments: User-verified completed work with links
+       - Blockers: Current blocking issues
+       - Plans: Specific, user-confirmed plans
   agent: user_update_agent

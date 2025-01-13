@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Union, Callable
 from datetime import datetime, timedelta
 import logging
 from src.rhythms.services.github_service import GitHubService
+from src.rhythms.services.linear_service import LinearService
 from src.rhythms.services.memory_service import MemoryService, StandupItemType
 from crewai.agents.parser import AgentFinish
 import os
@@ -174,8 +175,23 @@ class Rhythms():
     def get_github_activity() -> Dict:
         """Fetches GitHub activity for a given user using a personal access token."""
         github_service = GitHubService()
-        activity = github_service.get_user_activity("ConnorPeng", 5)
+        activity = github_service.get_user_activity("ConnorPeng", 1)  # Get last 24 hours
         summary = github_service.summarize_activity(activity)
+        logger.info(f"GitHub activity summary: {summary}")
+        return {
+            "completed_work": summary["completed"],
+            "work_in_progress": summary["in_progress"],
+            "blockers": summary["blockers"]
+        }
+
+    @tool("linear_activity")
+    def get_linear_activity() -> Dict:
+        """Fetches Linear activity for the authenticated user."""
+        linear_service = LinearService()
+        activity = linear_service.get_user_activity(1)
+        logger.info(f"connor debugging here 8 message output {activity}")
+        summary = linear_service.summarize_activity(activity)
+        logger.info(f"connor debugging here 9 message output {summary}")
         return summary
 
     @agent
@@ -186,6 +202,16 @@ class Rhythms():
             verbose=True,
             allow_delegation=False,
             tools=[self.get_github_activity],
+        )
+
+    @agent
+    def linear_activity_agent(self) -> Agent:
+        """Linear analytics expert for processing activity data."""
+        return Agent(
+            config=self.agents_config['linear_activity_agent'],
+            verbose=True,
+            allow_delegation=False,
+            tools=[self.get_linear_activity],
         )
 
     @agent
@@ -222,12 +248,22 @@ class Rhythms():
         return task
 
     @task
+    def fetch_linear_activity(self) -> Task:
+        """Fetches and analyzes recent Linear activity."""
+        logger.info("Creating Fetch Linear Activity task")
+        task = Task(
+            config=self.tasks_config['fetch_linear_activity_task'],
+        )
+        logger.info("Fetch Linear Activity task created successfully")
+        return task
+
+    @task
     def draft_standup_update(self) -> Task:
-        """Creates initial standup draft from GitHub data and memory context."""
+        """Creates initial standup draft from GitHub data, Linear data and memory context."""
         logger.info("Creating Draft Standup Update task")
         task = Task(
             config=self.tasks_config['draft_standup_update_task'],
-            context=[self.fetch_github_activity()],
+            context=[self.fetch_github_activity(), self.fetch_linear_activity()],
         )
         logger.info("Draft Standup Update task created successfully")
         return task
@@ -262,11 +298,13 @@ class Rhythms():
         crew = Crew(
             agents=[
                 self.github_activity_agent(),
+                self.linear_activity_agent(),
                 self.draft_agent(),
                 self.user_update_agent()
             ],
             tasks=[
                 self.fetch_github_activity(),
+                self.fetch_linear_activity(),
                 self.draft_standup_update(),
                 self.collect_user_update()
             ],
