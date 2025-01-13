@@ -2,11 +2,13 @@ from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
 from crewai.tools import tool, BaseTool
 from typing import Dict, List, Optional, Union, Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from src.rhythms.services.github_service import GitHubService
 from src.rhythms.services.memory_service import MemoryService, StandupItemType
 from crewai.agents.parser import AgentFinish
+import os
+from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(
@@ -29,7 +31,25 @@ class SlackInputTool(BaseTool):
         if self.slack_interaction_callback:
             return self.slack_interaction_callback(prompt)
         return "No Slack interaction callback configured"
+    
+class MemoryContextTool(BaseTool):
+    name: str = "get_memory_context"
+    description: str = "Fetches previous plans and unresolved blockers from memory."
+    get_memory_context_fn: Optional[Callable[[str], Dict]] = None
 
+    def __init__(self, get_memory_context_fn: Callable[[str], Dict]):
+        super().__init__()
+        self.get_memory_context_fn = get_memory_context_fn
+        load_dotenv()
+
+    def _run(self, _: str = None) -> Dict:
+        """Fetches previous plans and unresolved blockers from memory."""
+        github_username = os.getenv('GITHUB_USERNAME', 'ConnorPeng')
+        logger.info(f"Fetching memory context for user: {github_username}")
+        if not self.get_memory_context_fn:
+            return {}
+        return self.get_memory_context_fn(github_username)
+        
 @CrewBase
 class Rhythms():
     def __init__(self, slack_interaction_callback=None, slack_output_callback=None, db_path: str = "memory.db"):
@@ -41,6 +61,34 @@ class Rhythms():
         logging.getLogger('crewai').setLevel(logging.ERROR)
         logging.getLogger('langchain').setLevel(logging.ERROR)
         logging.getLogger('openai').setLevel(logging.ERROR)
+
+    def _get_memory_context(self, github_username: str) -> Dict:
+        """Get context from memory including previous plans and unresolved blockers."""
+        try:
+            user_data = self.memory_service.get_user(github_username)
+            if not user_data:
+                logger.warning(f"User {github_username} not found in database")
+                return {}
+            
+            # Get unresolved blockers
+            blockers = self.memory_service.get_unresolved_blockers(user_data['id'])
+            
+            # Get recent standups to find previous day's plans
+            recent_standups = self.memory_service.get_recent_standups(user_data['id'], days=2)
+            previous_plans = []
+            if recent_standups:
+                for standup in recent_standups:
+                    if standup['plans']:
+                        previous_plans = [item['description'] for item in standup['plans']]
+                        break
+            
+            return {
+                'previous_plans': previous_plans,
+                'unresolved_blockers': [blocker['description'] for blocker in blockers]
+            }
+        except Exception as e:
+            logger.error(f"Error getting memory context: {e}")
+            return {}
 
     def _handle_output(self, message: Union[str, AgentFinish], agent_name: Optional[str] = None) -> None:
         """Handle output by sending to Slack if callback exists."""
@@ -143,11 +191,12 @@ class Rhythms():
     @agent
     def draft_agent(self) -> Agent:
         """Technical writer for creating standup summaries."""
+        memory_tool = MemoryContextTool(self._get_memory_context)
         return Agent(
             config=self.agents_config['draft_agent'],
             verbose=True,
             allow_delegation=True,
-            tools=[],
+            tools=[memory_tool],
         )
 
     @agent
@@ -174,7 +223,7 @@ class Rhythms():
 
     @task
     def draft_standup_update(self) -> Task:
-        """Creates initial standup draft from GitHub data."""
+        """Creates initial standup draft from GitHub data and memory context."""
         logger.info("Creating Draft Standup Update task")
         task = Task(
             config=self.tasks_config['draft_standup_update_task'],

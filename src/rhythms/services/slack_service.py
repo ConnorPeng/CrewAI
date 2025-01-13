@@ -17,11 +17,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class SlackBot:
+    _instance = None
+    
+    def __new__(cls, github_service: GitHubService):
+        if cls._instance is None:
+            cls._instance = super(SlackBot, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
     def __init__(self, github_service: GitHubService):
         """Initialize the Slack Bot with Slack credentials."""
+        if self._initialized:
+            return
+            
         self.app_token = os.getenv("SLACK_APP_TOKEN")
         self.bot_token = os.getenv("SLACK_BOT_TOKEN")
         self.github_service = github_service
+        self.socket_client = None
+        self.client = None
+        self.event_counter = 0
+        self.user_responses = {}
+        self._initialized = True
         
         if not self.app_token or not self.bot_token:
             raise ValueError("SLACK_APP_TOKEN and SLACK_BOT_TOKEN must be set")
@@ -36,18 +52,46 @@ class SlackBot:
             token=self.bot_token,
             ssl=ssl_context
         )
-        self.socket_client = SocketModeClient(
-            app_token=self.app_token,
-            web_client=self.client
-        )
         
-        self.event_counter = 0
-        self.user_responses = {} 
-        
-        # Set up message handler
-        self._setup_handler()
         logger.info("SlackBot initialized successfully")
-        
+
+    def start(self) -> None:
+        """Start the Slack bot."""
+        try:
+            logger.info("Starting Slack bot...")
+            if self.socket_client:
+                logger.info("Cleaning up existing socket client...")
+                self.cleanup()
+                
+            self.socket_client = SocketModeClient(
+                app_token=self.app_token,
+                web_client=self.client
+            )
+            self._setup_handler()
+            self.socket_client.connect()
+            
+            # Keep the bot running
+            from time import sleep
+            while True:
+                sleep(1)
+        except Exception as e:
+            logger.error(f"Error in Slack bot: {e}")
+            self.cleanup()
+            raise
+
+    def cleanup(self) -> None:
+        """Clean up resources."""
+        if self.socket_client:
+            try:
+                self.socket_client.close()
+                self.socket_client = None
+            except Exception as e:
+                logger.error(f"Error cleaning up socket client: {e}")
+
+    def __del__(self):
+        """Destructor to ensure cleanup."""
+        self.cleanup()
+
     def _setup_handler(self) -> None:
         """Setup the socket mode event handler."""
         def socket_handler(client: SocketModeClient, req: SocketModeRequest) -> None:
@@ -348,12 +392,11 @@ class SlackBot:
         except Exception as e:
             logger.error(f"Error sending message to Slack: {str(e)}")
 
-    def start(self) -> None:
-        """Start the Slack bot."""
-        logger.info("Starting Slack bot...")
-        self.socket_client.connect()
-        
-        # Keep the bot running
-        from time import sleep
-        while True:
-            sleep(1) 
+    def cleanup(self) -> None:
+        """Clean up resources."""
+        if self.socket_client:
+            try:
+                self.socket_client.close()
+                self.socket_client = None
+            except Exception as e:
+                logger.error(f"Error cleaning up socket client: {e}") 

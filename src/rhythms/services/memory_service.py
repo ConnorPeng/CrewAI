@@ -129,19 +129,19 @@ class MemoryService:
         return None
 
     def create_standup(self, user_id: int, date: str) -> int:
-        """Create a new standup entry and return its ID."""
+        """Create a new standup entry and return its ID. If an entry already exists for the same user_id and date, it will be overwritten."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         try:
             cursor.execute(
-                "INSERT INTO standups (user_id, date) VALUES (?, ?)",
+                "REPLACE INTO standups (user_id, date) VALUES (?, ?)",
                 (user_id, date)
             )
             standup_id = cursor.lastrowid
             conn.commit()
             return standup_id
-        except sqlite3.IntegrityError as e:
+        except sqlite3.Error as e:
             logger.error(f"Error creating standup: {e}")
             raise
         finally:

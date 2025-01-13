@@ -16,32 +16,39 @@ fetch_github_activity_task:
 
 draft_standup_update_task:
   description: >
-    Create a structured standup draft using only verified GitHub data by:
+    Create a structured standup draft using GitHub data and memory context by:
     1. Converting the GitHub activity JSON into a clear standup format
-    2. Using bullet points for each item with links
-    3. Marking items that need user verification with [?]
-    4. Not adding any speculative content
+    2. If there are previous plans or blockers in memory, check their status
+       and incorporate relevant updates into today's sections
+    3. Using bullet points for each item with links
+    4. Marking items that need user verification with [?]
+    5. Not adding any speculative content
   expected_output: >
-    A markdown-formatted draft with:
+    A well formatted draft with three main sections:
     - Accomplishments: Bullet points of completed work with links
-    - Blockers: List of identified blocking issues
-    - Plans: List of in-progress work
-    Each section should only contain items from GitHub data
+    - Blockers: List of current blocking issues
+    - Plans: List of in-progress work and new plans
+    Each section should only contain items from GitHub data or memory
   agent: draft_agent
 
 collect_user_update_task:
   description: >
     Validate and finalize the standup draft through focused user interaction:
-    1. Present the current draft clearly
-    2. Ask for specific corrections or additions
-    3. If user expresses satisfaction (e.g., "looks good", "that's correct"), 
+    1. Present the current draft clearly with three sections:
+       - Accomplishments
+       - Blockers
+       - Plans
+    2. If there are previous unresolved blockers or plans in memory,
+       ask about their status in a natural way with context from memory
+    3. Ask for specific corrections or additions
+    4. If user expresses satisfaction (e.g., "looks good", "that's correct"), 
        conclude immediately
-    4. Otherwise, ask targeted questions about unclear [?] items
-    5. Limit to max 3 interactions
+    5. Otherwise, ask targeted questions about unclear [?] items
+    6. Limit to max 3 interactions
   expected_output: >
-    A final markdown-formatted standup with:
-    - User-verified accomplishments with links
-    - Confirmed or added blockers
-    - Specific, user-confirmed plans
-    All content must come from either GitHub data or direct user input
+    A final markdown-formatted standup with three sections:
+    - Accomplishments: User-verified completed work with links
+    - Blockers: Current blocking issues
+    - Plans: Specific, user-confirmed plans
+    All content must come from either GitHub data, memory context, or direct user input
   agent: user_update_agent

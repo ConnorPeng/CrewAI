@@ -5,6 +5,7 @@ from datetime import datetime, time
 from dotenv import load_dotenv
 import os
 import logging
+import signal
 
 # Disable verbose terminal output from dependencies
 logging.getLogger('crewai').setLevel(logging.ERROR)
@@ -18,6 +19,17 @@ from rhythms.services.slack_service import SlackBot
 from rhythms.services.memory_service import MemoryService
 
 warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
+
+# Global variable for the slack bot
+slack_bot = None
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals."""
+    logging.info(f"Received signal {signum}")
+    if slack_bot:
+        logging.info("Cleaning up Slack bot...")
+        slack_bot.cleanup()
+    sys.exit(0)
 
 def initialize_user(memory_service: MemoryService, github_username: str, github_token: str, email: str) -> int:
     """Initialize or retrieve user in the database."""
@@ -41,6 +53,12 @@ def initialize_user(memory_service: MemoryService, github_username: str, github_
         raise
 
 def run():
+    global slack_bot
+    
+    # Set up signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     # Load environment variables
     load_dotenv()
     
@@ -65,6 +83,8 @@ def run():
         slack_bot = SlackBot(github_service)
         slack_bot.start()
     except Exception as e:
+        if slack_bot:
+            slack_bot.cleanup()
         print(f"Error starting application: {str(e)}")
         raise
 
