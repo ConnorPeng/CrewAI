@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Union, Callable
 from datetime import datetime
 import logging
 from src.rhythms.services.github_service import GitHubService
+from src.rhythms.services.memory_service import MemoryService, StandupItemType
 from crewai.agents.parser import AgentFinish
 
 # Configure logging
@@ -31,10 +32,11 @@ class SlackInputTool(BaseTool):
 
 @CrewBase
 class Rhythms():
-    def __init__(self, slack_interaction_callback=None, slack_output_callback=None):
+    def __init__(self, slack_interaction_callback=None, slack_output_callback=None, db_path: str = "memory.db"):
         super().__init__()
         self.slack_interaction_callback = slack_interaction_callback
         self.slack_output_callback = slack_output_callback
+        self.memory_service = MemoryService(db_path=db_path)
         # Disable default printing to terminal more aggressively
         logging.getLogger('crewai').setLevel(logging.ERROR)
         logging.getLogger('langchain').setLevel(logging.ERROR)
@@ -58,6 +60,67 @@ class Rhythms():
                     self.slack_output_callback(message)
         except Exception as e:
             logger.error(f"Error in _handle_output: {str(e)}")
+
+    def _store_standup_update(self, github_username: str, standup_content: str):
+        """Store the finalized standup update in the database."""
+        try:
+            logger.info(f"connor debugging here 3 message output {standup_content}")
+            # Get or create user
+            user_data = self.memory_service.get_user(github_username)
+            if not user_data:
+                logger.warning(f"User {github_username} not found in database")
+                return
+            
+            user_id = user_data['id']
+            today = datetime.now().date().isoformat()
+            logger.info(f"connor debugging here 4 message output {today}")
+            # Create standup entry
+            try:
+                standup_id = self.memory_service.create_standup(user_id, today)
+            except Exception as e:
+                logger.error(f"Error creating standup: {e}")
+                return
+            logger.info(f"connor debugging here 5 message output {standup_id}")
+            # Parse and store standup items
+            sections = {
+                'accomplishments': StandupItemType.ACCOMPLISHMENT,
+                'blockers': StandupItemType.BLOCKER,
+                'plans': StandupItemType.PLAN
+            }
+            logger.info(f"connor debugging here 6 message output {sections}")
+            current_section = None
+            items = []
+            
+            for line in standup_content.split('\n'):
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Check for section headers
+                lower_line = line.lower()
+                for section in sections:
+                    if section in lower_line:
+                        current_section = section
+                        break
+                
+                # Store items under current section
+                if current_section and line.startswith('-'):
+                    item = line[1:].strip()
+                    if item:
+                        try:
+                            self.memory_service.add_standup_item(
+                                standup_id,
+                                sections[current_section],
+                                item
+                            )
+                        except Exception as e:
+                            logger.error(f"Error adding standup item: {e}")
+            
+            # Mark standup as submitted
+            self.memory_service.submit_standup(standup_id)
+            logger.info(f"connor debugging here 7 message output {standup_id}")
+        except Exception as e:
+            logger.error(f"Error storing standup update: {e}")
 
     @tool("github_activity")
     def get_github_activity() -> Dict:
@@ -96,7 +159,7 @@ class Rhythms():
             verbose=True,
             allow_delegation=False,
             tools=[slack_tool],
-            step_callback=lambda msg: self._handle_output(msg, "user_update_agent")
+            step_callback=lambda msg: self._handle_output_and_store(msg, "user_update_agent")
         )
 
     @task
@@ -127,12 +190,21 @@ class Rhythms():
         task = Task(
             config=self.tasks_config['collect_user_update_task'],
             context=[self.draft_standup_update()],
-            step_callback=lambda msg: self._handle_output(msg, "user_update_agent"),
+            step_callback=lambda msg: self._handle_output_and_store(msg, "user_update_agent"),
             output_file="final_standup.md",
             timeout=300
         )
         logger.info("Collect User Update task created successfully")
         return task
+
+    def _handle_output_and_store(self, message: Union[str, AgentFinish], agent_name: Optional[str] = None) -> None:
+        """Handle output and store standup if it's the final version."""
+        logger.info(f"connor debugging here Message type: {type(message)} final message debugging here {message}")
+        self._handle_output(message, agent_name)
+        if isinstance(message, AgentFinish):
+            # Store the finalized standup
+            logger.info(f"connor debugging here 2 message output {message.output}")
+            self._store_standup_update("ConnorPeng", message.output)
 
     @crew
     def standup_crew(self) -> Crew:

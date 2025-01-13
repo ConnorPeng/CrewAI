@@ -42,7 +42,7 @@ class SlackBot:
         )
         
         self.event_counter = 0
-        self.user_responses = {}  # Add this to store pending user responses
+        self.user_responses = {} 
         
         # Set up message handler
         self._setup_handler()
