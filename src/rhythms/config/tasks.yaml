@@ -51,7 +51,7 @@ draft_standup_update_task:
 
 collect_user_update_task:
   description: >
-    Validate and finalize the standup draft through focused user interaction:
+    Validate and finalize the standup draft through focused user interaction, don't add any information that wasn't explicitly provided:
     1. Present the current draft clearly with three sections:
        - Accomplishments
        - Blockers
