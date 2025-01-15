@@ -8,6 +8,7 @@ import logging
 import ssl
 from ..services.github_service import GitHubService
 from ..crew import Rhythms
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -37,6 +38,8 @@ class SlackBot:
         self.client = None
         self.event_counter = 0
         self.user_responses = {}
+        self.rhythms = None  # Will be set when handling commands
+        self.current_thread_ts = None  # Track current thread
         self._initialized = True
         
         if not self.app_token or not self.bot_token:
@@ -180,51 +183,171 @@ class SlackBot:
         """Handle the standup command."""
         channel_id = event["channel"]
         user_id = event["user"]
-        text = event.get("text", "").strip()
-        thread_ts = None
+        text = event.get("text", "").strip().lower()
+        thread_ts = event.get("thread_ts")  # Get thread_ts from event
         
-        if "standup" in text.lower():
+        # If in a thread, use that thread's timestamp
+        if thread_ts:
+            self.current_thread_ts = thread_ts
+        
+        # Handle pause command
+        if "pause" in text:
+            # Check if we're in an active conversation (either through rhythms state or thread context)
+            is_active = (
+                (self.rhythms and self.rhythms.current_conversation_state) or
+                (thread_ts and self.current_thread_ts == thread_ts) or
+                (thread_ts in str(self.user_responses))  # Check if we're waiting for a response in this thread
+            )
+            
+            if not is_active:
+                self._send_to_slack(
+                    channel_id,
+                    "No active standup session to pause.",
+                    self.current_thread_ts
+                )
+                return
+            
+            # If we don't have a state yet but we're in an active thread, create one
+            if not (self.rhythms and self.rhythms.current_conversation_state):
+                if not self.rhythms:
+                    self.rhythms = Rhythms(
+                        slack_interaction_callback=lambda prompt: self._get_user_input(
+                            channel_id, user_id, prompt, thread_ts
+                        ),
+                        slack_output_callback=lambda msg: self._send_to_slack(
+                            channel_id,
+                            self._format_dict_for_slack(msg) if isinstance(msg, dict) else str(msg),
+                            thread_ts
+                        )
+                    )
+                self.rhythms.current_conversation_state = {
+                    'status': 'active',
+                    'thread_ts': thread_ts,
+                    'channel_id': channel_id,
+                    'user_id': user_id
+                }
+                
+            session_id = self.rhythms.save_conversation_state()
+            if session_id:
+                self._send_to_slack(
+                    channel_id,
+                    "Standup session paused. Use `@bot resume` to continue later.",
+                    self.current_thread_ts
+                )
+            else:
+                self._send_to_slack(
+                    channel_id,
+                    "Failed to pause the standup session. Please try again.",
+                    self.current_thread_ts
+                )
+            return
+            
+        # Handle resume command
+        if "resume" in text:
+            if not self.rhythms:
+                self.rhythms = Rhythms(
+                    slack_interaction_callback=lambda prompt: self._get_user_input(
+                        channel_id, user_id, prompt, self.current_thread_ts
+                    ),
+                    slack_output_callback=lambda msg: self._send_to_slack(
+                        channel_id, 
+                        self._format_dict_for_slack(msg) if isinstance(msg, dict) else str(msg), 
+                        self.current_thread_ts
+                    )
+                )
+            
+            # Get the most recent session
+            conversations = self.rhythms.memory_service.list_user_conversations("ConnorPeng")
+            if not conversations:
+                self._send_to_slack(
+                    channel_id,
+                    "No paused session found to resume.",
+                    self.current_thread_ts
+                )
+                return
+                
+            most_recent_session = conversations[0]['session_id']
+            if self.rhythms.resume_conversation(most_recent_session):
+                # Start a new thread for the resumed session
+                response = self.client.chat_postMessage(
+                    channel=channel_id,
+                    text=f"Continuing standup for <@{user_id}>... 🔄"
+                )
+                self.current_thread_ts = response['ts']
+                
+                standup_crew = self.rhythms.standup_crew()
+                result = standup_crew.kickoff()
+                
+                if result:
+                    formatted_result = (
+                        self._format_dict_for_slack(result)
+                        if isinstance(result, dict)
+                        else str(result)
+                    )
+                    self._send_to_slack(
+                        channel_id,
+                        f"Resumed standup completed:\n{formatted_result}",
+                        self.current_thread_ts
+                    )
+            else:
+                self._send_to_slack(
+                    channel_id,
+                    "Could not resume the previous session. Please start a new standup.",
+                    self.current_thread_ts
+                )
+            return
+        
+        # Handle regular standup command
+        if "standup" in text:
             try:
                 # Start a new thread for this standup
                 response = self.client.chat_postMessage(
                     channel=channel_id,
-                    text=f"Starting standup process for <@{user_id}>... 🚀\nI'll gather your GitHub activity and help create your standup update."
+                    text=f"Starting standup process for <@{user_id}>... 🚀\nI'll gather your GitHub activity and help create your standup update.\n\nYou can use these commands during the standup:\n• `@bot pause` - Pause the current session\n• `@bot resume` - Resume your paused session"
                 )
-                thread_ts = response['ts']
+                self.current_thread_ts = response['ts']
 
                 def output_callback(message):
                     """Callback for CrewAI output"""
-                    logger.info(f"Received message from CrewAI: {message} type: {type(message)}")
                     if not message:
                         return
-                        
-                    # Format the message for Slack
-                    if isinstance(message, dict):
-                        formatted_message = self._format_dict_for_slack(message)
-                    else:
-                        formatted_message = str(message)
-                        
-                    logger.info(f"Sending formatted message to Slack: {formatted_message}")
-                    self._send_to_slack(channel_id, formatted_message, thread_ts)
+                    formatted_message = (
+                        self._format_dict_for_slack(message)
+                        if isinstance(message, dict)
+                        else str(message)
+                    )
+                    self._send_to_slack(channel_id, formatted_message, self.current_thread_ts)
 
                 # Initialize Rhythms with callbacks
-                rhythms = Rhythms(
+                self.rhythms = Rhythms(
                     slack_interaction_callback=lambda prompt: self._get_user_input(
-                        channel_id, user_id, prompt, thread_ts
+                        channel_id, user_id, prompt, self.current_thread_ts
                     ),
                     slack_output_callback=output_callback
                 )
                 
-                standup_crew = rhythms.standup_crew()
+                # Initialize conversation state immediately
+                self.rhythms.current_conversation_state = {
+                    'status': 'active',
+                    'thread_ts': self.current_thread_ts,
+                    'channel_id': channel_id,
+                    'user_id': user_id,
+                    'start_time': datetime.now().isoformat()
+                }
+                
+                standup_crew = self.rhythms.standup_crew()
                 result = standup_crew.kickoff()
 
-                # Send the final standup result
                 if result:
-                    formatted_result = self._format_dict_for_slack(result) if isinstance(result, dict) else str(result)
+                    formatted_result = (
+                        self._format_dict_for_slack(result)
+                        if isinstance(result, dict)
+                        else str(result)
+                    )
                     self._send_to_slack(
                         channel_id,
                         f"Here's your standup summary:\n{formatted_result}",
-                        thread_ts
+                        self.current_thread_ts
                     )
 
             except Exception as e:
@@ -232,7 +355,7 @@ class SlackBot:
                 self._send_to_slack(
                     channel_id,
                     "Sorry, I encountered an error while running the standup. Please try again.",
-                    thread_ts
+                    self.current_thread_ts
                 )
 
     def _format_dict_for_slack(self, data: Dict) -> str:
@@ -278,23 +401,33 @@ class SlackBot:
         """Get user input from Slack with a timeout."""
         import threading
         from queue import Queue
-        logger.info(f"connor debugging 1: Getting user input for {user_id} in channel {channel_id}")
+        logger.info(f"Getting user input for {user_id} in channel {channel_id}")
+        
+        # Update current thread timestamp and ensure we have a conversation state
+        self.current_thread_ts = thread_ts
+        if self.rhythms and not self.rhythms.current_conversation_state:
+            self.rhythms.current_conversation_state = {
+                'status': 'active',
+                'last_prompt': prompt,
+                'thread_ts': thread_ts,
+                'channel_id': channel_id,
+                'user_id': user_id
+            }
+        
         # Create a new response queue for this request
         response_queue = Queue()
-        key = (channel_id, user_id)
+        key = (channel_id, user_id, thread_ts)  # Add thread_ts to make the key unique per thread
         
-        # Clear any existing queue for this user
+        # Clear any existing queue for this user in this thread
         if key in self.user_responses:
             old_queue = self.user_responses[key]
             try:
-                # Clear the old queue
                 while not old_queue.empty():
                     old_queue.get_nowait()
             except:
                 pass
         
         self.user_responses[key] = response_queue
-        logger.info(f"Created new response queue for {key}")
 
         # Format the prompt for better readability
         formatted_prompt = (
@@ -326,13 +459,20 @@ class SlackBot:
                 }
             ]
         )
-        logger.info(f"Sent prompt to user {user_id} in channel {channel_id}")
 
         # Wait for response with timeout
         try:
-            logger.info(f"Waiting for response from {key}")
             response = response_queue.get(timeout=300)  # 5 minute timeout
-            logger.info(f"Received response from {key}: {response}")
+            
+            # Update conversation state to indicate we're in an active interaction
+            if self.rhythms and not self.rhythms.current_conversation_state:
+                self.rhythms.current_conversation_state = {
+                    'status': 'active',
+                    'last_prompt': prompt,
+                    'thread_ts': thread_ts,
+                    'channel_id': channel_id,
+                    'user_id': user_id
+                }
             
             # Acknowledge receipt of response
             self.client.chat_postMessage(
@@ -346,7 +486,6 @@ class SlackBot:
             error_msg = str(e)
             logger.error(f"Error getting response: {error_msg}")
             
-            # Send a more helpful error message based on the type of error
             if "timeout" in error_msg.lower():
                 error_response = "⚠️ No response received within the time limit. Please try the standup command again."
             else:
@@ -359,10 +498,8 @@ class SlackBot:
             )
             return "No response received"
         finally:
-            # Always clean up
             if key in self.user_responses:
                 del self.user_responses[key]
-                logger.info(f"Cleaned up response queue for {key}")
 
     def _send_to_slack(self, channel_id: str, message: str, thread_ts: str) -> None:
         """Send a message to Slack channel in thread."""

@@ -43,6 +43,19 @@ class MemoryService:
             )
         """)
         
+        # Create conversation_states table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS conversation_states (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL,
+                state_data TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+        
         # Create standups table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS standups (
@@ -288,3 +301,75 @@ class MemoryService:
         
         conn.close()
         return None 
+
+    def save_conversation_state(self, github_username: str, state: Dict) -> str:
+        """Save conversation state and return session ID."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Get user ID
+            cursor.execute(
+                "SELECT id FROM users WHERE github_username = ?",
+                (github_username,)
+            )
+            user_id = cursor.fetchone()
+            if not user_id:
+                raise ValueError(f"User not found: {github_username}")
+            
+            # Generate unique session ID
+            session_id = f"{github_username}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            
+            # Save state
+            cursor.execute("""
+                INSERT INTO conversation_states (session_id, user_id, state_data)
+                VALUES (?, ?, ?)
+            """, (session_id, user_id[0], json.dumps(state)))
+            
+            conn.commit()
+            return session_id
+        finally:
+            conn.close()
+
+    def get_conversation_state(self, session_id: str) -> Optional[Dict]:
+        """Retrieve conversation state by session ID."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT state_data
+                FROM conversation_states
+                WHERE session_id = ?
+            """, (session_id,))
+            
+            result = cursor.fetchone()
+            if result:
+                return json.loads(result[0])
+            return None
+        finally:
+            conn.close()
+
+    def list_user_conversations(self, github_username: str) -> List[Dict]:
+        """List all saved conversations for a user."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT cs.session_id, cs.created_at
+                FROM conversation_states cs
+                JOIN users u ON cs.user_id = u.id
+                WHERE u.github_username = ?
+                ORDER BY cs.created_at DESC
+            """, (github_username,))
+            
+            conversations = []
+            for row in cursor.fetchall():
+                conversations.append({
+                    'session_id': row[0],
+                    'created_at': row[1]
+                })
+            return conversations
+        finally:
+            conn.close() 

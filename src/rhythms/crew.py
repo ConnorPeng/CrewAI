@@ -1,5 +1,6 @@
 from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
+from crewai.tasks import TaskOutput
 from crewai.tools import tool, BaseTool
 from typing import Dict, List, Optional, Union, Callable
 from datetime import datetime, timedelta
@@ -10,13 +11,23 @@ from src.rhythms.services.memory_service import MemoryService, StandupItemType
 from crewai.agents.parser import AgentFinish
 import os
 from dotenv import load_dotenv
+import json
 
 # Configure logging
+log_filename = f"logs/standup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+os.makedirs('logs', exist_ok=True)  # Create logs directory if it doesn't exist
+
+# Configure logging to both file and console
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_filename),
+        logging.StreamHandler()  # This will continue logging to console
+    ]
 )
 logger = logging.getLogger(__name__)
+logger.info(f"Starting new logging session, output will be saved to: {log_filename}")
 
 class SlackInputTool(BaseTool):
     name: str = "get_slack_input"
@@ -58,10 +69,77 @@ class Rhythms():
         self.slack_interaction_callback = slack_interaction_callback
         self.slack_output_callback = slack_output_callback
         self.memory_service = MemoryService(db_path=db_path)
+        self.current_conversation_state = None
+        self.agent_outputs = {}  # Store outputs from each agent
         # Disable default printing to terminal more aggressively
         logging.getLogger('crewai').setLevel(logging.ERROR)
         logging.getLogger('langchain').setLevel(logging.ERROR)
         logging.getLogger('openai').setLevel(logging.ERROR)
+
+    def save_conversation_state(self) -> str:
+        """Save the current conversation state and return a session ID."""
+        if not self.current_conversation_state:
+            logger.warning("No active conversation to save")
+            return None
+            
+        logger.info("=== Saving Conversation State ===")
+        logger.info(f"Current agent outputs: {json.dumps(self.agent_outputs, indent=2)}")
+        
+        # Add agent outputs and progress to the state
+        self.current_conversation_state.update({
+            'agent_outputs': self.agent_outputs,
+            'last_active_agent': self._get_last_active_agent(),
+            'completed_agents': list(self.agent_outputs.keys())
+        })
+        
+        logger.info(f"Last active agent: {self._get_last_active_agent()}")
+        logger.info(f"Completed agents: {list(self.agent_outputs.keys())}")
+            
+        session_id = self.memory_service.save_conversation_state(
+            "ConnorPeng",  # TODO: Make this dynamic based on actual user
+            self.current_conversation_state
+        )
+        logger.info(f"Saved conversation state with session ID: {session_id}")
+        logger.info("=== State Save Complete ===")
+        
+        self.current_conversation_state = None
+        self.agent_outputs = {}
+        return session_id
+
+    def _get_last_active_agent(self) -> Optional[str]:
+        """Get the name of the last active agent."""
+        if not self.agent_outputs:
+            return None
+        return list(self.agent_outputs.keys())[-1]
+
+    def resume_conversation(self, session_id: str) -> bool:
+        """Resume a previously saved conversation state."""
+        try:
+            logger.info("=== Resuming Conversation ===")
+            logger.info(f"Attempting to resume session: {session_id}")
+            
+            state = self.memory_service.get_conversation_state(session_id)
+            if not state:
+                logger.warning(f"No saved conversation found for session ID: {session_id}")
+                return False
+                
+            logger.info("Retrieved state from database")
+            logger.info(f"State contents: {json.dumps(state, indent=2)}")
+            
+            self.current_conversation_state = state
+            # Restore agent outputs
+            self.agent_outputs = state.get('agent_outputs', {})
+            logger.info(f"Restored outputs from agents: {list(self.agent_outputs.keys())}")
+            logger.info("=== Resume Complete ===")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error resuming conversation: {e}")
+            return False
+
+    def _update_conversation_state(self, state: Dict) -> None:
+        """Update the current conversation state."""
+        self.current_conversation_state = state
 
     def _get_memory_context(self, github_username: str) -> Dict:
         """Get context from memory including previous plans and unresolved blockers."""
@@ -93,20 +171,40 @@ class Rhythms():
 
     def _handle_output(self, message: Union[str, AgentFinish], agent_name: Optional[str] = None) -> None:
         """Handle output by sending to Slack if callback exists."""
-        # Add guard against None messages
         if message is None:
             return
         
         try:
+            logger.info(f"=== Handling Output from {agent_name} ===")
+            output_text = None
             if isinstance(message, AgentFinish):
                 output_text = message.output
-                logger.info(f"Handling AgentFinish output from {agent_name}: {output_text}")
-                if self.slack_output_callback:
-                    self.slack_output_callback(output_text)
+                # Store the output for this agent
+                if agent_name:
+                    logger.info(f"Storing AgentFinish output for {agent_name}")
+                    self.agent_outputs[agent_name] = {
+                        'raw': output_text,
+                        'description': f"Output from {agent_name}",
+                        'summary': output_text[:200] + "..." if len(output_text) > 200 else output_text
+                    }
+                logger.info(f"AgentFinish output from {agent_name}: {output_text[:200]}...")
             elif isinstance(message, str):
-                logger.info(f"Handling string output from {agent_name}: {message}")
-                if self.slack_output_callback:
-                    self.slack_output_callback(message)
+                output_text = message
+                # Store the output for this agent
+                if agent_name:
+                    logger.info(f"Storing string output for {agent_name}")
+                    self.agent_outputs[agent_name] = {
+                        'raw': output_text,
+                        'description': f"Output from {agent_name}",
+                        'summary': output_text[:200] + "..." if len(output_text) > 200 else output_text
+                    }
+                logger.info(f"String output from {agent_name}: {message[:200]}...")
+                
+            if self.slack_output_callback and output_text:
+                logger.info("Sending output to Slack")
+                self.slack_output_callback(output_text)
+                
+            logger.info("=== Output Handling Complete ===")
         except Exception as e:
             logger.error(f"Error in _handle_output: {str(e)}")
 
@@ -284,17 +382,148 @@ class Rhythms():
 
     def _handle_output_and_store(self, message: Union[str, AgentFinish], agent_name: Optional[str] = None) -> None:
         """Handle output and store standup if it's the final version."""
-        logger.info(f"connor debugging here Message type: {type(message)} final message debugging here {message}")
+        logger.info(f"Message type: {type(message)}")
         self._handle_output(message, agent_name)
         if isinstance(message, AgentFinish):
             # Store the finalized standup
-            logger.info(f"connor debugging here 2 message output {message.output}")
-            self._store_standup_update("ConnorPeng", message.output)
+            if isinstance(message.output, str):
+                logger.info("Storing finalized standup")
+                self._store_standup_update("ConnorPeng", message.output)
+            else:
+                logger.info(f"Storing structured output: {json.dumps(message.output, indent=2)}")
+                self._store_standup_update("ConnorPeng", message.output.raw if hasattr(message.output, 'raw') else str(message.output))
 
     @crew
     def standup_crew(self) -> Crew:
         """Creates an intelligent autonomous Standup crew."""
-        logger.info("Creating Standup crew")
+        logger.info("\n=== Creating Standup Crew ===")
+        logger.info(f"Current conversation state exists: {self.current_conversation_state is not None}")
+        if self.current_conversation_state:
+            logger.info(f"Current conversation state contents: {json.dumps(self.current_conversation_state, indent=2)}")
+        
+        # Create all tasks first
+        logger.info("\n=== Creating Initial Tasks ===")
+        github_task = self.fetch_github_activity()
+        linear_task = self.fetch_linear_activity()
+        draft_task = self.draft_standup_update()
+        user_update_task = self.collect_user_update()
+        
+        # Define task dependencies
+        logger.info("\n=== Setting Up Task Dependencies ===")
+        draft_task.context = [github_task, linear_task]  # Draft depends on both GitHub and Linear data
+        user_update_task.context = [draft_task]  # User update depends on the draft
+        logger.info(f"Draft task context: {[t.description for t in draft_task.context]}")
+        logger.info(f"User update task context: {[t.description for t in user_update_task.context]}")
+        
+        tasks_to_include = []
+        
+        # If resuming from a saved state
+        if self.current_conversation_state and self.current_conversation_state.get('agent_outputs'):
+            logger.info("\n=== Resuming from Saved State ===")
+            agent_outputs = self.current_conversation_state.get('agent_outputs', {})
+            last_active_agent = self.current_conversation_state.get('last_active_agent')
+            completed_agents = self.current_conversation_state.get('completed_agents', [])
+            
+            logger.info("\n=== Resume State Details ===")
+            logger.info(f"Last active agent: {last_active_agent}")
+            logger.info(f"Completed agents: {completed_agents}")
+            logger.info(f"Agent outputs available: {list(agent_outputs.keys())}")
+            logger.info(f"Agent outputs content: {json.dumps(agent_outputs, indent=2)}")
+            
+            # Map agent names to tasks
+            task_mapping = {
+                'github_activity_agent': github_task,
+                'linear_activity_agent': linear_task,
+                'draft_agent': draft_task,
+                'user_update_agent': user_update_task
+            }
+            
+            # Restore outputs to tasks
+            logger.info("\n=== Restoring Task Outputs ===")
+            for agent_name, output_data in agent_outputs.items():
+                if agent_name in task_mapping:
+                    task = task_mapping[agent_name]
+                    logger.info(f"\nProcessing output for agent: {agent_name}")
+                    logger.info(f"Task before restoration: has_output={hasattr(task, 'output')}")
+                    
+                    # Ensure we have valid output data
+                    if not output_data:
+                        logger.warning(f"No output data for agent {agent_name}, skipping")
+                        continue
+                        
+                    # Create a TaskOutput object from the saved data with fallbacks
+                    task_output = TaskOutput(
+                        description=output_data.get('description', task.description or ''),
+                        raw=output_data.get('raw', ''),
+                        summary=output_data.get('summary', output_data.get('raw', '')[:100] + '...' if output_data.get('raw') else ''),
+                        agent=agent_name,
+                    )
+                    
+                    # Validate the TaskOutput object
+                    if not task_output.raw and not task_output.summary:
+                        logger.warning(f"Invalid TaskOutput for agent {agent_name}, skipping")
+                        continue
+                        
+                    # Set the task output
+                    task.output = task_output
+                    logger.info(f"Task after restoration: has_output={hasattr(task, 'output')}")
+                    logger.info(f"Restored output content: {json.dumps(output_data, indent=2)}")
+                    
+                    # Make the output available in the task's context
+                    if task.context:
+                        logger.info(f"\nProcessing context for task: {task.description}")
+                        for context_task in task.context:
+                            logger.info(f"Context task before: {context_task.description}, has_output={hasattr(context_task, 'output')}")
+                            if not hasattr(context_task, 'output'):
+                                context_task.output = task_output
+                                logger.info(f"Added output to context task: {context_task.description}")
+                            logger.info(f"Context task after: has_output={hasattr(context_task, 'output')}")
+            
+            # Determine which tasks to include based on last active agent
+            logger.info("\n=== Determining Tasks to Include ===")
+            should_include = False
+            for agent_name, task in task_mapping.items():
+                logger.info(f"\nChecking agent: {agent_name}")
+                logger.info(f"Task has output: {hasattr(task, 'output')}")
+                if hasattr(task, 'output'):
+                    logger.info(f"Task output summary: {task.output.summary}")
+                
+                if agent_name == last_active_agent:
+                    should_include = True
+                    logger.info(f"Found last active agent: {agent_name}, will include remaining tasks")
+                if should_include:
+                    tasks_to_include.append(task)
+                    logger.info(f"Including task: {task.description}")
+                else:
+                    logger.info(f"Skipping task for agent: {agent_name} (already completed)")
+                    if hasattr(task, 'output'):
+                        logger.info(f"Skipped task has output available: {task.output.summary}")
+        else:
+            # First time standup or no saved state - reset everything
+            logger.info("\n=== Starting New Standup Session ===")
+            logger.info("Resetting conversation state and agent outputs")
+            self.current_conversation_state = {
+                'start_time': datetime.now().isoformat(),
+                'agent_outputs': {},
+                'completed_agents': [],
+                'last_active_agent': None
+            }
+            self.agent_outputs = {}
+            tasks_to_include = [github_task, linear_task, draft_task, user_update_task]
+            logger.info(f"Including all tasks: {[t.description for t in tasks_to_include]}")
+        
+        # Set up task callbacks before creating the crew
+        logger.info("\n=== Setting Up Task Callbacks ===")
+        for task in tasks_to_include:
+            task.callback = lambda output, task=task: self._handle_task_completion(output, task)
+            logger.info(f"Added callback for task: {task.description}")
+            if hasattr(task, 'output') and task.output:
+                try:
+                    logger.info(f"Task already has output: {task.output.summary if hasattr(task.output, 'summary') else 'No summary available'}")
+                except Exception as e:
+                    logger.warning(f"Could not access task output summary: {str(e)}")
+        
+        logger.info(f"\nCreating crew with {len(tasks_to_include)} tasks")
         crew = Crew(
             agents=[
                 self.github_activity_agent(),
@@ -302,15 +531,79 @@ class Rhythms():
                 self.draft_agent(),
                 self.user_update_agent()
             ],
-            tasks=[
-                self.fetch_github_activity(),
-                self.fetch_linear_activity(),
-                self.draft_standup_update(),
-                self.collect_user_update()
-            ],
+            tasks=tasks_to_include,
             process=Process.sequential,
             memory=True,
             verbose=True,
+            state=self.current_conversation_state
         )
-        logger.info("Standup crew created successfully")
+        
+        logger.info("\n=== Crew Creation Summary ===")
+        logger.info(f"Total tasks included: {len(tasks_to_include)}")
+        if tasks_to_include:
+            logger.info(f"First task to execute: {tasks_to_include[0].description}")
+            logger.info(f"Task sequence: {[t.description for t in tasks_to_include]}")
+            logger.info("Task outputs available:")
+            for task in tasks_to_include:
+                try:
+                    if hasattr(task, 'output') and task.output:
+                        logger.info(f"- {task.description}: {task.output.summary if hasattr(task.output, 'summary') else 'No summary available'}")
+                    else:
+                        logger.info(f"- {task.description}: No output")
+                except Exception as e:
+                    logger.warning(f"Could not access task output for {task.description}: {str(e)}")
+                    logger.info(f"- {task.description}: Error accessing output")
+        logger.info("=== Crew Creation Complete ===")
+        
         return crew
+
+    def _handle_task_completion(self, output: 'TaskOutput', task: Task) -> None:
+        """Handle task completion by updating agent outputs and completed agents."""
+        logger.info(f"=== Handling Task Completion ===")
+        logger.info(f"Task completed: {task.description}")
+        
+        # Initialize conversation state if not exists
+        if not self.current_conversation_state:
+            self.current_conversation_state = {
+                'start_time': datetime.now().isoformat(),
+                'agent_outputs': {},
+                'completed_agents': [],
+                'last_active_agent': None
+            }
+        
+        if task.agent:
+            # Clean up the agent role string by removing quotes and newlines
+            agent_name = task.agent.role.strip().strip('"').strip("'").lower().replace(' ', '_')
+            logger.info(f"Updating outputs for agent: {agent_name}")
+            # Store both raw output and structured output
+            self.agent_outputs[agent_name] = {
+                'raw': output.raw,
+                'description': output.description,
+                'summary': output.summary
+            }
+            
+            # Ensure completed_agents exists
+            if 'completed_agents' not in self.current_conversation_state:
+                self.current_conversation_state['completed_agents'] = []
+                
+            if agent_name not in self.current_conversation_state['completed_agents']:
+                self.current_conversation_state['completed_agents'].append(agent_name)
+            self.current_conversation_state['last_active_agent'] = agent_name
+            self.current_conversation_state['agent_outputs'] = self.agent_outputs
+            
+            logger.info(f"Updated conversation state:")
+            logger.info(f"- Task Description: {output.description}")
+            logger.info(f"- Task Summary: {output.summary}")
+            logger.info(f"- Completed agents: {self.current_conversation_state['completed_agents']}")
+            logger.info(f"- Last active agent: {self.current_conversation_state['last_active_agent']}")
+            logger.info(f"- Agent outputs count: {len(self.agent_outputs)}")
+            
+            # If the output has JSON or Pydantic data, log it
+            if hasattr(output, 'json_dict') and output.json_dict:
+                logger.info(f"- JSON Output: {json.dumps(output.json_dict, indent=2)}")
+            if hasattr(output, 'pydantic') and output.pydantic:
+                logger.info(f"- Pydantic Output: {output.pydantic}")
+        else:
+            logger.warning(f"Task has no associated agent: {task.description}")
+            
+        logger.info("=== Task Completion Handling Complete ===")
