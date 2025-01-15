@@ -56,34 +56,41 @@ collect_user_update_task:
        - Accomplishments
        - Blockers
        - Plans
-    2. Never add information that wasn't explicitly provided
-    3. MUST use get_slack_input tool for ALL user interactions:
-       - First call: get_slack_input with draft and request for feedback
-       - After updates: get_slack_input with updated draft for confirmation
-       - Never proceed without getting response from get_slack_input
-    4. If there are previous unresolved blockers or plans in memory,
-       include questions about their status in the get_slack_input prompt
-    5. Process the response from get_slack_input before proceeding
-    6. Only mark as final after explicit confirmation via get_slack_input
-    7. Prefix final standup with "FINAL STANDUP:" to indicate completion
-    8. Limit to max 3 interactions
+    2. Ask for feedback ONCE with a simple question: "Does this look complete?"
+    3. Handle user response:
+       - If user approves (says "looks good", "yes", etc.):
+         * IMMEDIATELY return the exact draft with "FINAL STANDUP:" prefix
+         * DO NOT ask any more questions
+         * DO NOT modify the content
+       - If user requests changes:
+         * Update the draft with their changes
+         * Ask for confirmation with updated draft
+         * If approved, follow approval process above
+    4. NEVER:
+       - Ask multiple questions in one prompt
+       - Continue interaction after user approval
+       - Ask for specific updates unless user indicates changes needed
+       - Add information not provided by the user
+    5. Limit to max 2 interactions:
+       - First interaction: Present draft and ask if complete
+       - Second interaction (only if needed): Show updated draft and confirm
 
     Required tool usage:
-    - MUST use get_slack_input for every user interaction
-    - MUST wait for response from get_slack_input before proceeding
-    - MUST NOT finalize without confirmation from get_slack_input
+    - Use get_slack_input for user interaction
+    - Wait for response before proceeding
+    - Return actual standup content when approved
 
     Interaction flow:
-    1. get_slack_input(draft + feedback request) -> wait for response
-    2. get_slack_input(updated draft + confirmation) -> wait for response
-    3. Only when confirmed via get_slack_input -> return final version
+    1. get_slack_input("Does this look complete?") -> wait for response
+    2. If approved -> return "FINAL STANDUP:" + exact draft
+    3. If changes needed -> update, confirm, and follow step 2
   expected_output: >
     The output should be either:
-    1. A call to get_slack_input with the current draft and request for feedback
-    2. A call to get_slack_input with updated draft and request for confirmation
-    3. The final standup (only after confirmation via get_slack_input) prefixed with "FINAL STANDUP:"
-       containing three sections:
-       - Accomplishments: User-verified completed work with links
-       - Blockers: Current blocking issues
-       - Plans: Specific, user-confirmed plans
+    1. A call to get_slack_input with current draft and simple completion question
+    2. If changes requested: A call to get_slack_input with updated draft
+    3. The final standup (when approved) prefixed with "FINAL STANDUP:"
+       containing the exact same draft content with three sections:
+       - Accomplishments
+       - Blockers
+       - Plans
   agent: user_update_agent

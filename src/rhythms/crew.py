@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 import json
 
 # Configure logging
-log_filename = f"logs/standup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+log_filename = "logs/standup.log"  # Fixed filename
 os.makedirs('logs', exist_ok=True)  # Create logs directory if it doesn't exist
 
 # Configure logging to both file and console
@@ -22,12 +22,12 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_filename),
+        logging.FileHandler(log_filename, mode='w'),  # 'w' mode overwrites the file
         logging.StreamHandler()  # This will continue logging to console
     ]
 )
 logger = logging.getLogger(__name__)
-logger.info(f"Starting new logging session, output will be saved to: {log_filename}")
+logger.info(f"Starting new logging session in: {log_filename}")
 
 class SlackInputTool(BaseTool):
     name: str = "get_slack_input"
@@ -169,44 +169,38 @@ class Rhythms():
             logger.error(f"Error getting memory context: {e}")
             return {}
 
-    def _handle_output(self, message: Union[str, AgentFinish], agent_name: Optional[str] = None) -> None:
-        """Handle output by sending to Slack if callback exists."""
-        if message is None:
-            return
-        
-        try:
-            logger.info(f"=== Handling Output from {agent_name} ===")
-            output_text = None
-            if isinstance(message, AgentFinish):
-                output_text = message.output
-                # Store the output for this agent
-                if agent_name:
-                    logger.info(f"Storing AgentFinish output for {agent_name}")
-                    self.agent_outputs[agent_name] = {
-                        'raw': output_text,
-                        'description': f"Output from {agent_name}",
-                        'summary': output_text[:200] + "..." if len(output_text) > 200 else output_text
-                    }
-                logger.info(f"AgentFinish output from {agent_name}: {output_text[:200]}...")
-            elif isinstance(message, str):
-                output_text = message
-                # Store the output for this agent
-                if agent_name:
-                    logger.info(f"Storing string output for {agent_name}")
-                    self.agent_outputs[agent_name] = {
-                        'raw': output_text,
-                        'description': f"Output from {agent_name}",
-                        'summary': output_text[:200] + "..." if len(output_text) > 200 else output_text
-                    }
-                logger.info(f"String output from {agent_name}: {message[:200]}...")
-                
-            if self.slack_output_callback and output_text:
-                logger.info("Sending output to Slack")
-                self.slack_output_callback(output_text)
-                
-            logger.info("=== Output Handling Complete ===")
-        except Exception as e:
-            logger.error(f"Error in _handle_output: {str(e)}")
+    def _handle_output(self, agent_name: str, content: str) -> None:
+        """Handle output from an agent."""
+        logger.info("=== Handling Output and Store ===")
+        logger.info(f"Message type: {type(content)}")
+        logger.info(f"Message content: {content}")
+
+        # Check if already finalized
+        if hasattr(self, 'is_finalized') and self.is_finalized:
+            logger.info("Standup already finalized, skipping further processing")
+            raise AgentFinish(
+                return_values={"output": "Standup already finalized"},
+                log="Standup already finalized, stopping further processing"
+            )
+
+        if isinstance(content, str):
+            if "FINAL STANDUP:" in content:
+                # Extract and store the final content
+                final_content = content.split("FINAL STANDUP:", 1)[1].strip()
+                self._store_standup_update("ConnorPeng", final_content)
+                # Set finalization flag
+                self.is_finalized = True
+                # Stop further processing
+                raise AgentFinish(
+                    return_values={"output": final_content},
+                    log="Standup finalized successfully"
+                )
+            else:
+                # This is a user response, pass it back to the agent
+                return content
+
+        # Handle other message types
+        return self._handle_message_output(agent_name, content)
 
     def _store_standup_update(self, github_username: str, standup_content: str):
         """Store the finalized standup update in the database."""
@@ -375,23 +369,67 @@ class Rhythms():
             context=[self.draft_standup_update()],
             step_callback=lambda msg: self._handle_output_and_store(msg, "user_update_agent"),
             output_file="final_standup.md",
-            timeout=300
+            timeout=300,
+            tools=[SlackInputTool(self.slack_interaction_callback)],
+            agent=self.user_update_agent()
         )
         logger.info("Collect User Update task created successfully")
         return task
 
     def _handle_output_and_store(self, message: Union[str, AgentFinish], agent_name: Optional[str] = None) -> None:
         """Handle output and store standup if it's the final version."""
+        logger.info(f"=== Handling Output and Store ===")
         logger.info(f"Message type: {type(message)}")
-        self._handle_output(message, agent_name)
+        logger.info(f"Message content: {message}")
+        
+        # Extract the actual content
+        content = None
         if isinstance(message, AgentFinish):
-            # Store the finalized standup
-            if isinstance(message.output, str):
-                logger.info("Storing finalized standup")
-                self._store_standup_update("ConnorPeng", message.output)
+            content = message.return_values.get('output') if hasattr(message, 'return_values') else message.output
+            logger.info(f"Extracted content from AgentFinish: {content}")
+        elif isinstance(message, str):
+            content = message
+            logger.info(f"Using string content directly: {content}")
+        elif isinstance(message, dict):
+            content = message.get('output', str(message))
+            logger.info(f"Extracted content from dict: {content}")
+            
+        if not content:
+            logger.warning("No content extracted from message")
+            return
+            
+        # First handle the output
+        self._handle_output(agent_name, content)
+        
+        # Check if this is a final standup
+        if isinstance(content, str):
+            if "FINAL STANDUP:" in content:
+                logger.info("Found final standup marker, storing update")
+                final_content = content.split("FINAL STANDUP:", 1)[1].strip()
+                self._store_standup_update("ConnorPeng", final_content)
+                # Clear active standup when finished
+                self.active_standup = None
             else:
-                logger.info(f"Storing structured output: {json.dumps(message.output, indent=2)}")
-                self._store_standup_update("ConnorPeng", message.output.raw if hasattr(message.output, 'raw') else str(message.output))
+                # This is a user response, pass it back to the agent
+                logger.info("Processing user response")
+                if self.slack_interaction_callback:
+                    response = self.slack_interaction_callback(content)
+                    logger.info(f"Got response from slack callback: {response}")
+                    return response
+        elif isinstance(content, dict):
+            if content.get('raw') and "FINAL STANDUP:" in content['raw']:
+                logger.info("Found final standup marker in raw output, storing update")
+                final_content = content['raw'].split("FINAL STANDUP:", 1)[1].strip()
+                self._store_standup_update("ConnorPeng", final_content)
+                # Clear active standup when finished
+                self.active_standup = None
+            else:
+                # This might be a user response in a structured format
+                logger.info("Processing structured user response")
+                if self.slack_interaction_callback:
+                    response = self.slack_interaction_callback(content.get('raw', str(content)))
+                    logger.info(f"Got response from slack callback: {response}")
+                    return response
 
     @crew
     def standup_crew(self) -> Crew:
