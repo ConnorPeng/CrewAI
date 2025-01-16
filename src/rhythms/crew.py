@@ -170,7 +170,7 @@ class Rhythms():
             logger.error(f"Error getting memory context: {e}")
             return {}
 
-    def _handle_output(self, agent_name: str, content: str) -> None:
+    def _handle_output(self, agent_name: str, content: str) -> Union[str, AgentFinish]:
         """Handle output from an agent."""
         logger.info("=== Handling Output ===")
         logger.info(f"Message type: {type(content)}")
@@ -179,7 +179,7 @@ class Rhythms():
         # Check if already finalized
         if hasattr(self, 'is_finalized') and self.is_finalized:
             logger.info("Standup already finalized, skipping further processing")
-            raise AgentFinish(
+            return AgentFinish(
                 thought="Standup already finalized",
                 output="Standup already finalized",
                 text="Standup already finalized, stopping further processing"
@@ -197,7 +197,7 @@ class Rhythms():
                 # Set finalization flag
                 self.is_finalized = True
                 # Stop further processing
-                raise AgentFinish(
+                return AgentFinish(
                     thought="Standup finalized successfully",
                     output=final_content,
                     text="Standup finalized successfully"
@@ -415,7 +415,11 @@ class Rhythms():
             
         # First handle the output
         output_result = self._handle_output(agent_name, content)
-        if output_result:
+        if isinstance(output_result, AgentFinish):
+            # If we got an AgentFinish, we're done
+            logger.info("Received AgentFinish, ending processing")
+            return output_result
+        elif output_result:
             return output_result
             
         # Check if this is a final standup
@@ -616,82 +620,6 @@ class Rhythms():
         logger.info("=== Crew Creation Complete ===")
         
         return crew
-
-    async def get_initial_draft(self) -> str:
-        """Get the initial standup draft without user interaction."""
-        logger.info("Getting initial standup draft...")
-        try:
-            # Create a crew with only the tasks needed for the draft
-            github_task = self.fetch_github_activity()
-            linear_task = self.fetch_linear_activity()
-            draft_task = self.draft_standup_update()
-            
-            # Set up task dependencies
-            draft_task.context = [github_task, linear_task]
-            
-            # Create a crew with just these tasks
-            crew = Crew(
-                agents=[
-                    self.github_activity_agent(),
-                    self.linear_activity_agent(),
-                    self.draft_agent()
-                ],
-                tasks=[github_task, linear_task, draft_task],
-                process=Process.sequential,
-                memory=True,
-                verbose=True
-            )
-            
-            # Run the crew and get the draft
-            result = await crew.kickoff()
-            
-            # Extract the draft content
-            if isinstance(result, dict):
-                return self._format_dict_for_slack(result)
-            return str(result)
-            
-        except Exception as e:
-            logger.error(f"Error getting initial draft: {e}")
-            return "Error preparing standup draft. Please try again."
-
-    def _format_dict_for_slack(self, data: Dict) -> str:
-        """Format a dictionary into a readable Slack message."""
-        if not isinstance(data, dict):
-            return str(data)
-            
-        formatted_sections = []
-        
-        # Handle GitHub activity data
-        if "completed_work" in data:
-            if data["completed_work"]:
-                formatted_sections.append("*:white_check_mark: Completed Work:*")
-                for item in data["completed_work"]:
-                    formatted_sections.append(f"• {item}")
-            
-        if "work_in_progress" in data:
-            if data["work_in_progress"]:
-                formatted_sections.append("\n*:construction: Work in Progress:*")
-                for item in data["work_in_progress"]:
-                    formatted_sections.append(f"• {item}")
-            
-        if "potential_blockers" in data:
-            if data["potential_blockers"]:
-                formatted_sections.append("\n*:warning: Potential Blockers:*")
-                for item in data["potential_blockers"]:
-                    formatted_sections.append(f"• {item}")
-                    
-        # If no data in standard categories, format generically
-        if not formatted_sections:
-            for key, value in data.items():
-                formatted_key = key.replace("_", " ").title()
-                if isinstance(value, list):
-                    formatted_sections.append(f"*{formatted_key}:*")
-                    for item in value:
-                        formatted_sections.append(f"• {item}")
-                else:
-                    formatted_sections.append(f"*{formatted_key}:* {value}")
-                    
-        return "\n".join(formatted_sections) if formatted_sections else "No data to display"
 
     def _handle_task_completion(self, output: 'TaskOutput', task: Task) -> None:
         """Handle task completion by updating agent outputs and completed agents."""

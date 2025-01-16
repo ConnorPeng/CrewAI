@@ -51,39 +51,46 @@ draft_standup_update_task:
 
 collect_user_update_task:
   description: >
-    Handle standup updates naturally and efficiently:
+    Handle standup updates naturally and efficiently, and when needed collect user inputs using the get_slack_input tool:
     1. Present the draft clearly with:
        - Accomplishments
        - Blockers
        - Plans
-    2. Ask if it looks complete
-    3. Handle responses naturally using these two situations:
+    2. Ask for user feedback if it looks complete
+    3. Handle user responses naturally using these two situations:
        situation 1: If the user provides updates:
-         * Clean the update to extract core information (e.g., "waiting for test computer" from "add a blocker: waiting for test computer")
-         * Add the cleaned update naturally to the appropriate section:
+         a) Clean the update to extract core information (e.g., "waiting for test computer" from "add a blocker: waiting for test computer")
+         b) Add the cleaned update naturally to the appropriate section:
            - For blockers: Add as a new bullet point
            - For accomplishments: Add under relevant subsection
            - For plans: Add as a new bullet point
-         * Show the updated draft
-         * ALWAYS ask for confirmation ("Does this look complete?")
-         * Wait for user response:
+         c) Show the updated draft and ask for confirmation ("Does this look complete?")
+         d) Wait for user response:
            - If approved, finalize with "FINAL STANDUP:" prefix
            - If more updates needed, process them and repeat
-       situation 2: If the user response is satisfied (any positive response like looks good, good, etc.):
-         * IMMEDIATELY finalize with "FINAL STANDUP:" prefix
-         * Use the exact same draft
-         * End the conversation
+       situation 2: If the user response shows satisfaction (e.g., "looks good", "yes", "👍", "good", etc.):
+         a) Create a clean final version with ONLY these sections, don't hallucinate:
+            # Standup Summary
+            ## Accomplishments
+            [accomplishments content]
+            ## Blockers
+            [blockers content]
+            ## Plans
+            [plans content]
+         b) Prefix it with "FINAL STANDUP:"
+         c) Return it as final output
+         d) End the conversation
     4. Important guidelines:
        - NEVER finalize without explicit user confirmation
        - Clean and integrate updates naturally (e.g., "waiting for test computer" not "add a blocker: waiting for test computer")
        - Never ignore user updates - they must be added to the draft
-       - Be natural in recognizing approval
+       - Be natural in recognizing approval (any positive response counts)
        - Never add content the user didn't provide
        - Never repeat after approval
        - Keep interaction efficient and human-like
   expected_output: >
     Must be ONE of these:
-    1. On approval: "FINAL STANDUP:" + exact draft
+    1. On approval or satisfaction: "FINAL STANDUP:" + exact draft
     2. On updates: Modified draft (with naturally integrated user changes) + "Does this look complete?"
   agent: user_update_agent
   max_retries: 3

@@ -9,10 +9,6 @@ import ssl
 from ..services.github_service import GitHubService
 from ..crew import Rhythms
 from datetime import datetime
-import asyncio
-import schedule
-import time
-import threading
 
 # Configure logging
 logging.basicConfig(
@@ -42,12 +38,9 @@ class SlackBot:
         self.client = None
         self.event_counter = 0
         self.user_responses = {}
-        self.rhythms = None
-        self.current_thread_ts = None
-        self.active_standup = None
-        self.scheduled_standups = {}  # Store pre-loaded standup drafts
-        self.standup_schedule = os.getenv("STANDUP_SCHEDULE", "10:00")  # Default to 10 AM
-        self.standup_channel = os.getenv("STANDUP_CHANNEL", "general")
+        self.rhythms = None  # Will be set when handling commands
+        self.current_thread_ts = None  # Track current thread
+        self.active_standup = None  # Track active standup
         self._initialized = True
         
         if not self.app_token or not self.bot_token:
@@ -67,7 +60,7 @@ class SlackBot:
         logger.info("SlackBot initialized successfully")
 
     def start(self) -> None:
-        """Start the Slack bot with scheduler."""
+        """Start the Slack bot."""
         try:
             logger.info("Starting Slack bot...")
             if self.socket_client:
@@ -79,154 +72,16 @@ class SlackBot:
                 web_client=self.client
             )
             self._setup_handler()
-            
-            # Setup scheduler
-            self._setup_scheduler()
-            
-            # Start scheduler in a separate thread
-            scheduler_thread = threading.Thread(target=self._run_scheduler, daemon=True)
-            scheduler_thread.start()
-            
             self.socket_client.connect()
             
             # Keep the bot running
+            from time import sleep
             while True:
-                time.sleep(1)
+                sleep(1)
         except Exception as e:
             logger.error(f"Error in Slack bot: {e}")
             self.cleanup()
             raise
-
-    def _setup_scheduler(self) -> None:
-        """Setup the scheduler for daily standups."""
-        # Schedule pre-loading of drafts 15 minutes before standup time
-        preload_time = self._adjust_time(self.standup_schedule, minutes=-15)
-        schedule.every().day.at(preload_time).do(self._preload_standup_drafts)
-        
-        # Schedule the actual standup notifications
-        schedule.every().day.at(self.standup_schedule).do(self._send_standup_notifications)
-        
-        logger.info(f"Scheduled standup notifications for {self.standup_schedule} daily")
-        logger.info(f"Scheduled draft pre-loading for {preload_time} daily")
-
-    def _run_scheduler(self) -> None:
-        """Run the scheduler loop."""
-        while True:
-            schedule.run_pending()
-            time.sleep(30)  # Check every 30 seconds
-
-    def _adjust_time(self, time_str: str, minutes: int = 0) -> str:
-        """Adjust a time string by adding/subtracting minutes."""
-        time_obj = datetime.strptime(time_str, "%H:%M")
-        adjusted = time_obj.replace(minute=time_obj.minute + minutes)
-        return adjusted.strftime("%H:%M")
-
-    async def _preload_standup_drafts(self) -> None:
-        """Pre-load standup drafts for all users."""
-        try:
-            # Get all users in the standup channel
-            channel_id = await self._get_channel_id(self.standup_channel)
-            if not channel_id:
-                logger.error("Could not find standup channel")
-                return
-
-            response = self.client.conversations_members(channel_id=channel_id)
-            members = response["members"]
-
-            # Clear previous drafts
-            self.scheduled_standups = {}
-
-            # Pre-load draft for each user
-            for user_id in members:
-                # Skip bots and inactive users
-                user_info = self.client.users_info(user=user_id)["user"]
-                if user_info["is_bot"] or not user_info["is_active"]:
-                    continue
-
-                try:
-                    # Initialize Rhythms for this user
-                    rhythms = Rhythms(
-                        slack_interaction_callback=None,  # No interaction needed for draft
-                        slack_output_callback=None
-                    )
-
-                    # Get the draft
-                    standup_crew = rhythms.standup_crew()
-                    draft = await standup_crew.get_initial_draft()  # Assuming this method exists
-
-                    # Store the draft
-                    self.scheduled_standups[user_id] = {
-                        'draft': draft,
-                        'rhythms': rhythms,
-                        'timestamp': datetime.now().isoformat()
-                    }
-
-                    logger.info(f"Pre-loaded standup draft for user {user_id}")
-                except Exception as e:
-                    logger.error(f"Error pre-loading draft for user {user_id}: {e}")
-
-        except Exception as e:
-            logger.error(f"Error in pre-loading standup drafts: {e}")
-
-    async def _send_standup_notifications(self) -> None:
-        """Send standup notifications with pre-loaded drafts."""
-        try:
-            channel_id = await self._get_channel_id(self.standup_channel)
-            if not channel_id:
-                logger.error("Could not find standup channel")
-                return
-
-            for user_id, standup_data in self.scheduled_standups.items():
-                try:
-                    # Start a new thread for this user's standup
-                    response = self.client.chat_postMessage(
-                        channel=channel_id,
-                        text=f"🌟 Good morning <@{user_id}>! Time for your daily standup update."
-                    )
-                    thread_ts = response['ts']
-
-                    # Send the pre-loaded draft
-                    draft = standup_data['draft']
-                    rhythms = standup_data['rhythms']
-
-                    # Update the thread tracking
-                    self.current_thread_ts = thread_ts
-                    self.active_standup = thread_ts
-
-                    # Send the draft and ask for feedback
-                    self._send_to_slack(
-                        channel_id,
-                        f"I've prepared a draft based on your recent activity:\n\n{draft}\n\nDoes this look complete or would you like to make any updates?",
-                        thread_ts
-                    )
-
-                    # Setup the interaction callbacks now that we're ready for user input
-                    rhythms.slack_interaction_callback = lambda prompt: self._get_user_input(
-                        channel_id, user_id, prompt, thread_ts
-                    )
-                    rhythms.slack_output_callback = lambda msg: self._send_to_slack(
-                        channel_id,
-                        self._format_dict_for_slack(msg) if isinstance(msg, dict) else str(msg),
-                        thread_ts
-                    )
-
-                except Exception as e:
-                    logger.error(f"Error sending notification to user {user_id}: {e}")
-
-        except Exception as e:
-            logger.error(f"Error in sending standup notifications: {e}")
-
-    async def _get_channel_id(self, channel_name: str) -> str:
-        """Get channel ID from channel name."""
-        try:
-            response = self.client.conversations_list()
-            for channel in response["channels"]:
-                if channel["name"] == channel_name:
-                    return channel["id"]
-            return None
-        except Exception as e:
-            logger.error(f"Error getting channel ID: {e}")
-            return None
 
     def cleanup(self) -> None:
         """Clean up resources."""
