@@ -17,11 +17,13 @@ from rhythms.crew import Rhythms
 from rhythms.services.github_service import GitHubService
 from rhythms.services.slack_service import SlackBot
 from rhythms.services.memory_service import MemoryService
+from rhythms.services.scheduler_service import SchedulerService
 
 warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 
-# Global variable for the slack bot
+# Global variables
 slack_bot = None
+scheduler = None
 
 def signal_handler(signum, frame):
     """Handle shutdown signals."""
@@ -53,7 +55,7 @@ def initialize_user(memory_service: MemoryService, github_username: str, github_
         raise
 
 def run():
-    global slack_bot
+    global slack_bot, scheduler
     
     # Set up signal handlers
     signal.signal(signal.SIGINT, signal_handler)
@@ -71,17 +73,31 @@ def run():
         github_username = os.getenv("GITHUB_USERNAME", "ConnorPeng")
         github_token = os.getenv("GITHUB_TOKEN")
         email = os.getenv("USER_EMAIL", "default@example.com")
-        
-        if not github_token:
-            raise ValueError("GITHUB_TOKEN environment variable is required")
+        notification_time = os.getenv("STANDUP_NOTIFICATION_TIME", "10:00")
+        slack_channel = os.getenv("SLACK_CHANNEL_ID")
+        slack_user_id = os.getenv("SLACK_USER_ID")
+        if not all([github_token, slack_channel]):
+            raise ValueError("GITHUB_TOKEN and SLACK_CHANNEL_ID environment variables are required")
         
         # Initialize or retrieve user
         user_id = initialize_user(memory_service, github_username, github_token, email)
         logging.info(f"Initialized user {github_username} with ID {user_id}")
         
-        # Initialize and start Slack bot with memory service
+        # Initialize Slack bot
         slack_bot = SlackBot(github_service)
+        
+        # Initialize scheduler with Slack bot reference
+        scheduler = SchedulerService(slack_bot)
+        
+        # Connect scheduler to slack bot
+        slack_bot.set_scheduler(scheduler)
+        
+        # Schedule standup for the user
+        scheduler.schedule_standup(slack_user_id, slack_channel, notification_time)
+        
+        # Start the Slack bot (this will also handle scheduling)
         slack_bot.start()
+        
     except Exception as e:
         if slack_bot:
             slack_bot.cleanup()

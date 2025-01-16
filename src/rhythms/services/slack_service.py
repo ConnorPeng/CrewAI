@@ -9,6 +9,7 @@ import ssl
 from ..services.github_service import GitHubService
 from ..crew import Rhythms
 from datetime import datetime
+import time
 
 # Configure logging
 logging.basicConfig(
@@ -74,10 +75,16 @@ class SlackBot:
             self._setup_handler()
             self.socket_client.connect()
             
-            # Keep the bot running
-            from time import sleep
+            # Keep the bot running and check schedules
+            last_schedule_check = 0
             while True:
-                sleep(1)
+                current_time = time.time()
+                # Check schedules every minute
+                if current_time - last_schedule_check >= 60:
+                    if hasattr(self, 'scheduler') and self.scheduler:
+                        self.scheduler.check_schedules()
+                    last_schedule_check = current_time
+                time.sleep(1)
         except Exception as e:
             logger.error(f"Error in Slack bot: {e}")
             self.cleanup()
@@ -226,7 +233,8 @@ class SlackBot:
     def _handle_standup_command(self, event: Dict[str, Any]) -> None:
         """Handle the standup command."""
         channel_id = event["channel"]
-        user_id = event["user"]
+        user_id = event["user"]  # This is the correct Slack user ID
+        logger.info(f"Received standup command from {user_id} in channel {channel_id}")
         text = event.get("text", "").strip().lower()
         thread_ts = event.get("thread_ts", event.get("ts"))
         
@@ -304,7 +312,7 @@ class SlackBot:
                 )
             
             # Get the most recent session
-            conversations = self.rhythms.memory_service.list_user_conversations("ConnorPeng")
+            conversations = self.rhythms.memory_service.list_user_conversations(user_id)
             if not conversations:
                 self._send_to_slack(
                     channel_id,
@@ -352,7 +360,17 @@ class SlackBot:
                 # Start a new thread for this standup
                 response = self.client.chat_postMessage(
                     channel=channel_id,
-                    text=f"Starting standup process for <@{user_id}>... 🚀\nI'll gather your GitHub activity and help create your standup update.\n\nYou can use these commands during the standup:\n• `@bot pause` - Pause the current session\n• `@bot resume` - Resume your paused session"
+                    text=f"Starting standup process for <@{user_id}>... 🚀",
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"Starting standup process for <@{user_id}>... 🚀\nI'll gather your GitHub activity and help create your standup update.\n\nYou can use these commands during the standup:\n• `@bot pause` - Pause the current session\n• `@bot resume` - Resume your paused session"
+                            }
+                        }
+                    ],
+                    link_names=True
                 )
                 self.current_thread_ts = response['ts']
                 # Set this as the active standup
@@ -497,7 +515,8 @@ class SlackBot:
                         }
                     ]
                 }
-            ]
+            ],
+            link_names=True  # This ensures that user mentions are properly linked
         )
 
         # Wait for response with timeout
@@ -643,3 +662,7 @@ class SlackBot:
                 )
             except Exception as e:
                 logger.error(f"Error sending error message: {e}") 
+
+    def set_scheduler(self, scheduler):
+        """Set the scheduler service reference."""
+        self.scheduler = scheduler 

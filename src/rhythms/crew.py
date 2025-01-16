@@ -32,18 +32,30 @@ logger.info(f"Starting new logging session in: {log_filename}")
 
 class SlackInputTool(BaseTool):
     name: str = "get_slack_input"
-    description: str = "Gets input from the user through Slack."
+    description: str = "Gets input from the user through Slack. Use this tool to interact with the user and get their feedback or updates."
     slack_interaction_callback: Optional[Callable[[str], str]] = None
 
     def __init__(self, slack_interaction_callback: Optional[Callable[[str], str]] = None):
+        """Initialize the tool with a callback for Slack interaction."""
         super().__init__()
         self.slack_interaction_callback = slack_interaction_callback
 
     def _run(self, prompt: str) -> str:
+        """Run the tool with the given prompt."""
         logger.info(f"Running SlackInputTool with prompt: {prompt}")
         if self.slack_interaction_callback:
-            return self.slack_interaction_callback(prompt)
+            try:
+                response = self.slack_interaction_callback(prompt)
+                logger.info(f"Received response from Slack: {response}")
+                return response
+            except Exception as e:
+                logger.error(f"Error getting Slack input: {str(e)}")
+                raise
         return "No Slack interaction callback configured"
+
+    def _arun(self, prompt: str) -> str:
+        """Run the tool asynchronously (required by CrewAI)."""
+        return self._run(prompt)
     
 class MemoryContextTool(BaseTool):
     name: str = "get_memory_context"
