@@ -8,7 +8,8 @@ import logging
 from src.rhythms.services.github_service import GitHubService
 from src.rhythms.services.linear_service import LinearService
 from src.rhythms.services.memory_service import MemoryService, StandupItemType
-from crewai.agents.parser import AgentFinish
+from crewai.agents.parser import AgentFinish, AgentAction
+from crewai.agents.crew_agent_executor import ToolResult
 import os
 from dotenv import load_dotenv
 import json
@@ -171,7 +172,7 @@ class Rhythms():
 
     def _handle_output(self, agent_name: str, content: str) -> None:
         """Handle output from an agent."""
-        logger.info("=== Handling Output and Store ===")
+        logger.info("=== Handling Output ===")
         logger.info(f"Message type: {type(content)}")
         logger.info(f"Message content: {content}")
 
@@ -179,12 +180,17 @@ class Rhythms():
         if hasattr(self, 'is_finalized') and self.is_finalized:
             logger.info("Standup already finalized, skipping further processing")
             raise AgentFinish(
-                return_values={"output": "Standup already finalized"},
-                log="Standup already finalized, stopping further processing"
+                thought="Standup already finalized",
+                output="Standup already finalized",
+                text="Standup already finalized, stopping further processing"
             )
 
         if isinstance(content, str):
-            if "FINAL STANDUP:" in content:
+            # If this is a draft (has sections), check if it's approved
+            if any(section in content.lower() for section in ["accomplishments:", "blockers:", "plans:"]):
+                # This is a draft being shown to the user
+                return content
+            elif "FINAL STANDUP:" in content:
                 # Extract and store the final content
                 final_content = content.split("FINAL STANDUP:", 1)[1].strip()
                 self._store_standup_update("ConnorPeng", final_content)
@@ -192,15 +198,13 @@ class Rhythms():
                 self.is_finalized = True
                 # Stop further processing
                 raise AgentFinish(
-                    return_values={"output": final_content},
-                    log="Standup finalized successfully"
+                    thought="Standup finalized successfully",
+                    output=final_content,
+                    text="Standup finalized successfully"
                 )
             else:
-                # This is a user response, pass it back to the agent
+                # This is a user update, let the agent process it
                 return content
-
-        # Handle other message types
-        return self._handle_message_output(agent_name, content)
 
     def _store_standup_update(self, github_username: str, standup_content: str):
         """Store the finalized standup update in the database."""
@@ -387,6 +391,17 @@ class Rhythms():
         if isinstance(message, AgentFinish):
             content = message.return_values.get('output') if hasattr(message, 'return_values') else message.output
             logger.info(f"Extracted content from AgentFinish: {content}")
+        elif isinstance(message, AgentAction):
+            # Handle AgentAction - extract tool call information
+            if message.tool == "get_slack_input":
+                content = message.tool_input
+                logger.info(f"Extracted content from AgentAction tool input: {content}")
+            else:
+                content = message.text
+                logger.info(f"Extracted content from AgentAction text: {content}")
+        elif isinstance(message, ToolResult):  # Handle ToolResult
+            content = message.result
+            logger.info(f"Extracted content from ToolResult: {content}")
         elif isinstance(message, str):
             content = message
             logger.info(f"Using string content directly: {content}")
@@ -399,8 +414,10 @@ class Rhythms():
             return
             
         # First handle the output
-        self._handle_output(agent_name, content)
-        
+        output_result = self._handle_output(agent_name, content)
+        if output_result:
+            return output_result
+            
         # Check if this is a final standup
         if isinstance(content, str):
             if "FINAL STANDUP:" in content:
@@ -410,10 +427,15 @@ class Rhythms():
                 # Clear active standup when finished
                 self.active_standup = None
             else:
-                # This is a user response, pass it back to the agent
+                # This is a user response, pass it back to the agent for processing
                 logger.info("Processing user response")
                 if self.slack_interaction_callback:
-                    response = self.slack_interaction_callback(content)
+                    # If the content looks like a draft (has sections), it's for user review
+                    if any(section in content.lower() for section in ["accomplishments", "blockers", "plans"]):
+                        response = self.slack_interaction_callback(f"{content}\nDoes this look complete?")
+                    else:
+                        # This is a user update, let the agent process it
+                        response = content
                     logger.info(f"Got response from slack callback: {response}")
                     return response
         elif isinstance(content, dict):
@@ -594,6 +616,82 @@ class Rhythms():
         logger.info("=== Crew Creation Complete ===")
         
         return crew
+
+    async def get_initial_draft(self) -> str:
+        """Get the initial standup draft without user interaction."""
+        logger.info("Getting initial standup draft...")
+        try:
+            # Create a crew with only the tasks needed for the draft
+            github_task = self.fetch_github_activity()
+            linear_task = self.fetch_linear_activity()
+            draft_task = self.draft_standup_update()
+            
+            # Set up task dependencies
+            draft_task.context = [github_task, linear_task]
+            
+            # Create a crew with just these tasks
+            crew = Crew(
+                agents=[
+                    self.github_activity_agent(),
+                    self.linear_activity_agent(),
+                    self.draft_agent()
+                ],
+                tasks=[github_task, linear_task, draft_task],
+                process=Process.sequential,
+                memory=True,
+                verbose=True
+            )
+            
+            # Run the crew and get the draft
+            result = await crew.kickoff()
+            
+            # Extract the draft content
+            if isinstance(result, dict):
+                return self._format_dict_for_slack(result)
+            return str(result)
+            
+        except Exception as e:
+            logger.error(f"Error getting initial draft: {e}")
+            return "Error preparing standup draft. Please try again."
+
+    def _format_dict_for_slack(self, data: Dict) -> str:
+        """Format a dictionary into a readable Slack message."""
+        if not isinstance(data, dict):
+            return str(data)
+            
+        formatted_sections = []
+        
+        # Handle GitHub activity data
+        if "completed_work" in data:
+            if data["completed_work"]:
+                formatted_sections.append("*:white_check_mark: Completed Work:*")
+                for item in data["completed_work"]:
+                    formatted_sections.append(f"• {item}")
+            
+        if "work_in_progress" in data:
+            if data["work_in_progress"]:
+                formatted_sections.append("\n*:construction: Work in Progress:*")
+                for item in data["work_in_progress"]:
+                    formatted_sections.append(f"• {item}")
+            
+        if "potential_blockers" in data:
+            if data["potential_blockers"]:
+                formatted_sections.append("\n*:warning: Potential Blockers:*")
+                for item in data["potential_blockers"]:
+                    formatted_sections.append(f"• {item}")
+                    
+        # If no data in standard categories, format generically
+        if not formatted_sections:
+            for key, value in data.items():
+                formatted_key = key.replace("_", " ").title()
+                if isinstance(value, list):
+                    formatted_sections.append(f"*{formatted_key}:*")
+                    for item in value:
+                        formatted_sections.append(f"• {item}")
+                else:
+                    formatted_sections.append(f"*{formatted_key}:* {value}")
+                    
+        return "\n".join(formatted_sections) if formatted_sections else "No data to display"
 
     def _handle_task_completion(self, output: 'TaskOutput', task: Task) -> None:
         """Handle task completion by updating agent outputs and completed agents."""
