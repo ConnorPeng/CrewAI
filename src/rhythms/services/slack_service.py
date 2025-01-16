@@ -114,9 +114,14 @@ class SlackBot:
     def _setup_handler(self) -> None:
         """Setup the socket mode event handler."""
         def socket_handler(client: SocketModeClient, req: SocketModeRequest) -> None:
+            logger.info(f"connor debugging Received request: {req.type}")
             if req.type == "events_api":
                 event = req.payload.get("event", {})
                 event_type = event.get("type")
+                
+                # Log all incoming events for debugging
+                logger.info(f"Received event: {event_type}")
+                logger.info(f"Event payload: {event}")
                 
                 # Always acknowledge the request first
                 response = SocketModeResponse(envelope_id=req.envelope_id)
@@ -128,28 +133,6 @@ class SlackBot:
                     user_id = event.get("user")
                     thread_ts = event.get("thread_ts", event.get("ts"))
                     text = event.get("text", "").strip().lower()
-                    
-                    # Check if this is a duplicate event
-                    event_key = f"{channel_id}:{user_id}:{thread_ts}:{text}"
-                    current_time = datetime.now()
-                    
-                    # Store recent events with timestamp to prevent duplicates
-                    if not hasattr(self, '_recent_events'):
-                        self._recent_events = {}
-                    
-                    # Check if we've seen this exact event in the last 2 seconds
-                    if event_key in self._recent_events:
-                        last_time = self._recent_events[event_key]
-                        if (current_time - last_time).total_seconds() < 2:
-                            logger.info(f"Skipping duplicate event: {event_key}")
-                            return
-                    
-                    # Update the event timestamp
-                    self._recent_events[event_key] = current_time
-                    
-                    # Clean up old events (older than 5 seconds)
-                    self._recent_events = {k: v for k, v in self._recent_events.items() 
-                                         if (current_time - v).total_seconds() < 5}
                     
                     # Set this as the active standup for new standups
                     if "standup" in text and not any(cmd in text for cmd in ["pause", "resume"]):
@@ -165,9 +148,18 @@ class SlackBot:
                     user_id = event.get("user")
                     thread_ts = event.get("thread_ts")
                     bot_id = event.get("bot_id")
+                    subtype = event.get("subtype")
                     
-                    # Ignore bot messages and messages not in threads
-                    if bot_id or not thread_ts:
+                    logger.info(f"Processing message event:")
+                    logger.info(f"- Channel: {channel_id}")
+                    logger.info(f"- User: {user_id}")
+                    logger.info(f"- Thread: {thread_ts}")
+                    logger.info(f"- Bot ID: {bot_id}")
+                    logger.info(f"- Subtype: {subtype}")
+                    
+                    # Ignore bot messages, messages not in threads, and message edits
+                    if bot_id or not thread_ts or subtype:
+                        logger.info("Ignoring message due to filters")
                         return
                         
                     text = event.get("text", "").strip()
@@ -176,6 +168,7 @@ class SlackBot:
                     # Check if this is a response we're waiting for
                     key = (channel_id, user_id, thread_ts)
                     logger.info(f"Checking for response queue with key: {key}")
+                    logger.info(f"Current response queues: {list(self.user_responses.keys())}")
                     
                     if key in self.user_responses:
                         response_data = self.user_responses[key]
@@ -185,8 +178,9 @@ class SlackBot:
                             logger.info(f"Successfully put response in queue for {key}")
                         except Exception as e:
                             logger.error(f"Error putting response in queue: {str(e)}")
+                            logger.exception("Full traceback:")
                     else:
-                        logger.info(f"No waiting queue found for key {key}. Available keys: {list(self.user_responses.keys())}")
+                        logger.info(f"No waiting queue found for key {key}")
 
         self.socket_client.socket_mode_request_listeners.append(socket_handler)
         logger.info("Socket handler setup complete")
@@ -475,6 +469,7 @@ class SlackBot:
         import threading
         from queue import Queue
         logger.info(f"Getting user input for {user_id} in channel {channel_id} prompt: {prompt}")
+        logger.info(f"Using thread_ts: {thread_ts}")
         
         # Create a new response queue for this request
         response_queue = Queue()
@@ -486,6 +481,8 @@ class SlackBot:
             'last_prompt': prompt,
             'timestamp': datetime.now().isoformat()
         }
+        logger.info(f"Created response queue with key: {key}")
+        logger.info(f"Current response queues after adding: {list(self.user_responses.keys())}")
 
         # Format the prompt for better readability
         formatted_prompt = (
@@ -494,7 +491,7 @@ class SlackBot:
         )
 
         # Send the prompt to the user
-        self.client.chat_postMessage(
+        message = self.client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,
             text=formatted_prompt,
@@ -518,9 +515,11 @@ class SlackBot:
             ],
             link_names=True  # This ensures that user mentions are properly linked
         )
+        logger.info(f"Sent prompt message with ts: {message.get('ts')}")
 
         # Wait for response with timeout
         try:
+            logger.info(f"Waiting for response on queue with key: {key}")
             response = response_queue.get(timeout=300)  # 5 minute timeout
             logger.info(f"Got response: {response}")
             
@@ -545,6 +544,7 @@ class SlackBot:
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Error getting response: {error_msg}")
+            logger.exception("Full traceback:")
             
             if "timeout" in error_msg.lower():
                 error_response = "⚠️ No response received within the time limit. Please try the standup command again."
@@ -558,8 +558,10 @@ class SlackBot:
             )
             return "No response received"
         finally:
+            logger.info(f"Cleaning up response queue for key: {key}")
             if key in self.user_responses:
                 del self.user_responses[key]
+            logger.info(f"Current response queues after cleanup: {list(self.user_responses.keys())}")
 
     def _send_to_slack(self, channel_id: str, message: str, thread_ts: str) -> None:
         """Send a message to Slack channel in thread."""
