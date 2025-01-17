@@ -1,54 +1,76 @@
 # Rhythms Crew
 
-Welcome to the Rhythms Crew project, powered by [crewAI](https://crewai.com). This template is designed to help you set up a multi-agent AI system with ease, leveraging the powerful and flexible framework provided by crewAI. Our goal is to enable your agents to collaborate effectively on complex tasks, maximizing their collective intelligence and capabilities.
+A powerful multi-agent AI system built with [crewAI](https://crewai.com). This project demonstrates how to orchestrate multiple AI agents to collaborate on complex tasks, leveraging crewAI's flexible framework for maximum efficiency and intelligence.
 
-## Installation
+## Prerequisites
 
-Ensure you have Python >=3.10 <3.13 installed on your system. This project uses [UV](https://docs.astral.sh/uv/) for dependency management and package handling, offering a seamless setup and execution experience.
+- Python >=3.10 <3.13
+- [UV](https://docs.astral.sh/uv/) package manager
 
-First, if you haven't already, install uv:
+## Quick Start
+
+1. Install UV if you haven't already:
 
 ```bash
 pip install uv
 ```
 
-Next, navigate to your project directory and install the dependencies:
+2. Clone this repository and navigate to the project directory
 
-(Optional) Lock the dependencies and install them by using the CLI command:
+3. Install dependencies:
+
 ```bash
 crewai install
 ```
-### Customizing
 
-**Add your `OPENAI_API_KEY` into the `.env` file**
+4. Set up your environment:
 
-- Modify `src/rhythms/config/agents.yaml` to define your agents
-- Modify `src/rhythms/config/tasks.yaml` to define your tasks
-- Modify `src/rhythms/crew.py` to add your own logic, tools and specific args
-- Modify `src/rhythms/main.py` to add custom inputs for your agents and tasks
+   - Copy `.env.example` to `.env`
+   - Add your `OPENAI_API_KEY` to the `.env` file
 
-## Running the Project
-
-To kickstart your crew of AI agents and begin task execution, run this from the root folder of your project:
+5. Run the project:
 
 ```bash
-$ crewai run
+crewai run
 ```
 
-This command initializes the rhythms Crew, assembling the agents and assigning them tasks as defined in your configuration.
+By default, this will generate a `report.md` file containing LLM research results.
 
-This example, unmodified, will run the create a `report.md` file with the output of a research on LLMs in the root folder.
+## Configuration
 
-## Understanding Your Crew
+The project is highly customizable through these key files:
 
-The rhythms Crew is composed of multiple AI agents, each with unique roles, goals, and tools. These agents collaborate on a series of tasks, defined in `config/tasks.yaml`, leveraging their collective skills to achieve complex objectives. The `config/agents.yaml` file outlines the capabilities and configurations of each agent in your crew.
+- `src/rhythms/config/agents.yaml` - Define agent roles, capabilities, and behaviors
+- `src/rhythms/config/tasks.yaml` - Specify tasks and workflows
+- `src/rhythms/crew.py` - Customize logic, tools, and specific arguments
+- `src/rhythms/main.py` - Configure custom inputs for agents and tasks
 
-## Support
+## Project Structure
 
-For support, questions, or feedback regarding the Rhythms Crew or crewAI.
-- Visit our [documentation](https://docs.crewai.com)
-- Reach out to us through our [GitHub repository](https://github.com/joaomdmoura/crewai)
-- [Join our Discord](https://discord.com/invite/X4JWnZnxPb)
-- [Chat with our docs](https://chatg.pt/DWjSBZn)
+```
+src/rhythms/
+├── config/
+│   ├── agents.yaml    # Agent definitions
+│   └── tasks.yaml     # Task configurations
+├── crew.py           # Core crew logic
+└── main.py          # Entry point
+```
 
-Let's create wonders together with the power and simplicity of crewAI.
+## How It Works
+
+The Rhythms Crew orchestrates multiple AI agents, each with specific roles and capabilities. These agents work together on tasks defined in your configuration files, combining their specialized skills to achieve complex objectives efficiently.
+
+## Resources
+
+- [Documentation](https://docs.crewai.com)
+- [GitHub Repository](https://github.com/joaomdmoura/crewai)
+- [Discord Community](https://discord.com/invite/X4JWnZnxPb)
+- [Documentation Chat](https://chatg.pt/DWjSBZn)
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+[Add your license information here]

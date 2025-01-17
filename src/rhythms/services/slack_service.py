@@ -75,6 +75,11 @@ class SlackBot:
             self._setup_handler()
             self.socket_client.connect()
             
+            # For testing: Trigger notification immediately after connection
+            if hasattr(self, 'scheduler') and self.scheduler:
+                logger.info("Testing: Triggering immediate notification...")
+                self.scheduler.prepare_and_notify()
+            
             # Keep the bot running and check schedules
             last_schedule_check = 0
             while True:

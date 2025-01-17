@@ -89,11 +89,11 @@ def run():
         # Initialize scheduler with Slack bot reference
         scheduler = SchedulerService(slack_bot)
         
-        # Connect scheduler to slack bot
-        slack_bot.set_scheduler(scheduler)
-        
         # Schedule standup for the user
         scheduler.schedule_standup(slack_user_id, slack_channel, notification_time)
+
+        # Connect scheduler to slack bot
+        slack_bot.set_scheduler(scheduler)
         
         # Start the Slack bot (this will also handle scheduling)
         slack_bot.start()
