@@ -89,7 +89,7 @@ class Rhythms():
         logging.getLogger('langchain').setLevel(logging.ERROR)
         logging.getLogger('openai').setLevel(logging.ERROR)
 
-    def save_conversation_state(self) -> str:
+    def save_conversation_state(self, user_id: str) -> str:
         """Save the current conversation state and return a session ID."""
         if not self.current_conversation_state:
             logger.warning("No active conversation to save")
@@ -109,8 +109,8 @@ class Rhythms():
         logger.info(f"Completed agents: {list(self.agent_outputs.keys())}")
             
         session_id = self.memory_service.save_conversation_state(
-            "ConnorPeng",  # TODO: Make this dynamic based on actual user
-            self.current_conversation_state
+            slack_user_id=user_id,  # Pass the user_id from Slack
+            state=self.current_conversation_state
         )
         logger.info(f"Saved conversation state with session ID: {session_id}")
         logger.info("=== State Save Complete ===")

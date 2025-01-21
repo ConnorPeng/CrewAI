@@ -33,22 +33,22 @@ def signal_handler(signum, frame):
         slack_bot.cleanup()
     sys.exit(0)
 
-def initialize_user(memory_service: MemoryService, github_username: str, github_token: str, email: str) -> int:
-    """Initialize or retrieve user in the database."""
+def initialize_user(memory_service: MemoryService, github_username: str, github_token: str, 
+                   slack_user_id: str, email: str) -> int:
+    """Initialize or retrieve user."""
     try:
-        # Check if user exists
-        user_data = memory_service.get_user(github_username)
-        if user_data:
-            return user_data['id']
-        
-        # Create new user if doesn't exist
+        # Create user if doesn't exist
         user_id = memory_service.create_user(
             github_username=github_username,
             github_token=github_token,
             email=email,
-            timezone="UTC",  # Default timezone
-            notification_time=time(9, 0)  # Default notification time
+            slack_user_id=slack_user_id  # Pass the slack_user_id here
         )
+        
+        # Print user data to verify
+        user_data = memory_service.get_user(github_username)
+        logging.info(f"User data after creation: {user_data}")
+        
         return user_id
     except Exception as e:
         logging.error(f"Error initializing user: {e}")
@@ -76,11 +76,11 @@ def run():
         notification_time = os.getenv("STANDUP_NOTIFICATION_TIME", "10:00")
         slack_channel = os.getenv("SLACK_CHANNEL_ID")
         slack_user_id = os.getenv("SLACK_USER_ID")
-        if not all([github_token, slack_channel]):
-            raise ValueError("GITHUB_TOKEN and SLACK_CHANNEL_ID environment variables are required")
+        if not all([github_token, slack_channel, slack_user_id]):
+            raise ValueError("GITHUB_TOKEN, SLACK_CHANNEL_ID, and SLACK_USER_ID environment variables are required")
         
-        # Initialize or retrieve user
-        user_id = initialize_user(memory_service, github_username, github_token, email)
+        # Initialize or retrieve user with slack_user_id
+        user_id = initialize_user(memory_service, github_username, github_token, slack_user_id, email)
         logging.info(f"Initialized user {github_username} with ID {user_id}")
         
         # Initialize Slack bot

@@ -7,7 +7,7 @@ import logging
 # Disable all logging during tests
 logging.disable(logging.CRITICAL)
 
-from src.rhythms.services.memory_service import MemoryService, StandupItemType
+from rhythms.services.memory_service import MemoryService, StandupItemType
 
 class TestMemoryService(unittest.TestCase):
     @classmethod

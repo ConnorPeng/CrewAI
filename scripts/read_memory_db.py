@@ -5,6 +5,7 @@ import sys
 import os
 from tabulate import tabulate
 import logging
+import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -52,10 +53,11 @@ def read_database(db_path: str = "memory.db"):
         conn = connect_to_db(db_path)
         cursor = conn.cursor()
         
-        # Read Users (now including tokens)
+        # Read Users (now including slack_user_id)
         users_query = """
-            SELECT id, github_username, github_token, linear_token, email, format, timezone, 
-                   notification_time, created_at, updated_at
+            SELECT id, github_username, github_token, linear_token, email, 
+                   slack_user_id, format, timezone, notification_time, 
+                   created_at, updated_at
             FROM users
         """
         print_table_data(cursor, users_query, "Users")
@@ -80,6 +82,32 @@ def read_database(db_path: str = "memory.db"):
             ORDER BY s.date DESC, si.type
         """
         print_table_data(cursor, items_query, "Standup Items")
+        
+        # Updated Conversation States query to include state_data
+        conversations_query = """
+            SELECT cs.id, cs.session_id, cs.user_id, u.github_username,
+                   cs.state_data, cs.created_at, cs.updated_at
+            FROM conversation_states cs
+            JOIN users u ON cs.user_id = u.id
+            ORDER BY cs.created_at DESC
+        """
+        print_table_data(cursor, conversations_query, "Conversation States")
+        
+        # Add a more detailed view of conversation states
+        print("\nDetailed Conversation States:")
+        cursor.execute(conversations_query)
+        for row in cursor.fetchall():
+            id, session_id, user_id, github_username, state_data, created_at, updated_at = row
+            print(f"\nSession: {session_id}")
+            print(f"User: {github_username} (ID: {user_id})")
+            print(f"Created: {created_at}")
+            print("State Data:")
+            try:
+                state = json.loads(state_data)
+                print(json.dumps(state, indent=2))
+            except json.JSONDecodeError:
+                print(f"Raw state data: {state_data}")
+            print("-" * 80)
         
     except sqlite3.Error as e:
         logger.error(f"Database error: {e}")

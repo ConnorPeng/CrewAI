@@ -17,6 +17,20 @@ class MemoryService:
         self.db_path = db_path
         self._init_db()
 
+    def _print_schema(self):
+        """Print the current database schema."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            logger.info("=== Database Schema ===")
+            cursor.execute("PRAGMA table_info(users)")
+            columns = cursor.fetchall()
+            for col in columns:
+                logger.info(f"Column: {col}")
+        finally:
+            conn.close()
+
     def _init_db(self):
         """Initialize the database with necessary tables."""
         conn = sqlite3.connect(self.db_path)
@@ -27,66 +41,77 @@ class MemoryService:
         
         cursor = conn.cursor()
         
-        # Create users table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                github_username TEXT NOT NULL UNIQUE,
-                github_token TEXT NOT NULL,
-                linear_token TEXT,
-                email TEXT NOT NULL UNIQUE,
-                format TEXT DEFAULT 'bullets',
-                timezone TEXT DEFAULT 'UTC',
-                notification_time TIME DEFAULT '09:00:00',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Create conversation_states table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS conversation_states (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL UNIQUE,
-                user_id INTEGER NOT NULL,
-                state_data TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            )
-        """)
-        
-        # Create standups table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS standups (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                date DATE NOT NULL,
-                submission_time TIMESTAMP,
-                submitted BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id),
-                UNIQUE(user_id, date)
-            )
-        """)
-        
-        # Create standup_items table with type check
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS standup_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                standup_id INTEGER NOT NULL,
-                type TEXT NOT NULL CHECK(type IN ('accomplishment', 'plan', 'blocker')),
-                description TEXT NOT NULL,
-                resolved BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (standup_id) REFERENCES standups(id)
-            )
-        """)
-        
-        conn.commit()
-        conn.close()
+        try:
+            # Drop existing users table to ensure clean schema
+            # Create users table if it doesn't exist
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    github_username TEXT NOT NULL UNIQUE,
+                    github_token TEXT NOT NULL,
+                    linear_token TEXT,
+                    email TEXT NOT NULL UNIQUE,
+                    slack_user_id TEXT UNIQUE,
+                    format TEXT DEFAULT 'bullets',
+                    timezone TEXT DEFAULT 'UTC',
+                    notification_time TIME DEFAULT '09:00:00',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Create conversation_states table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS conversation_states (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL UNIQUE,
+                    user_id INTEGER NOT NULL,
+                    state_data TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id)
+                )
+            """)
+            
+            # Create standups table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS standups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    date DATE NOT NULL,
+                    submission_time TIMESTAMP,
+                    submitted BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id),
+                    UNIQUE(user_id, date)
+                )
+            """)
+            
+            # Create standup_items table with type check
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS standup_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    standup_id INTEGER NOT NULL,
+                    type TEXT NOT NULL CHECK(type IN ('accomplishment', 'plan', 'blocker')),
+                    description TEXT NOT NULL,
+                    resolved BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (standup_id) REFERENCES standups(id)
+                )
+            """)
+            
+            conn.commit()
+            
+            # Print schema to verify
+            self._print_schema()
+            
+        except Exception as e:
+            logger.error(f"Error initializing database: {e}")
+            raise
+        finally:
+            conn.close()
 
     def _get_connection(self):
         """Get a database connection with foreign keys enabled."""
@@ -96,6 +121,7 @@ class MemoryService:
         return conn
 
     def create_user(self, github_username: str, github_token: str, email: str, 
+                   slack_user_id: Optional[str] = None,
                    linear_token: Optional[str] = None, format: str = 'bullets',
                    timezone: str = 'UTC', notification_time: time = time(9, 0)) -> int:
         """Create a new user and return their ID."""
@@ -103,14 +129,32 @@ class MemoryService:
         cursor = conn.cursor()
         
         try:
+            # Check if user exists by github_username or slack_user_id
+            cursor.execute("""
+                SELECT id FROM users 
+                WHERE github_username = ? OR (slack_user_id = ? AND slack_user_id IS NOT NULL)
+            """, (github_username, slack_user_id))
+            existing_user = cursor.fetchone()
+            if existing_user:
+                # Update slack_user_id if it's provided and different
+                if slack_user_id:
+                    cursor.execute("""
+                        UPDATE users 
+                        SET slack_user_id = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ? AND (slack_user_id IS NULL OR slack_user_id != ?)
+                    """, (slack_user_id, existing_user[0], slack_user_id))
+                    conn.commit()
+                return existing_user[0]
+
+            # Create new user if doesn't exist
             cursor.execute("""
                 INSERT INTO users (
                     github_username, github_token, linear_token, email, 
-                    format, timezone, notification_time
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    slack_user_id, format, timezone, notification_time
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 github_username, github_token, linear_token, email,
-                format, timezone, notification_time.strftime('%H:%M:%S')
+                slack_user_id, format, timezone, notification_time.strftime('%H:%M:%S')
             ))
             user_id = cursor.lastrowid
             conn.commit()
@@ -302,29 +346,31 @@ class MemoryService:
         conn.close()
         return None 
 
-    def save_conversation_state(self, github_username: str, state: Dict) -> str:
+    def save_conversation_state(self, slack_user_id: str, state: Dict) -> str:
         """Save conversation state and return session ID."""
         conn = self._get_connection()
         cursor = conn.cursor()
         
         try:
-            # Get user ID
+            # Get user ID by slack_user_id
             cursor.execute(
-                "SELECT id FROM users WHERE github_username = ?",
-                (github_username,)
+                "SELECT id, github_username FROM users WHERE slack_user_id = ?",
+                (slack_user_id,)
             )
-            user_id = cursor.fetchone()
-            if not user_id:
-                raise ValueError(f"User not found: {github_username}")
+            user_row = cursor.fetchone()
+            if not user_row:
+                raise ValueError(f"User not found: {slack_user_id}")
             
-            # Generate unique session ID
+            user_id, github_username = user_row
+            
+            # Generate unique session ID using github_username for consistency
             session_id = f"{github_username}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
             
             # Save state
             cursor.execute("""
                 INSERT INTO conversation_states (session_id, user_id, state_data)
                 VALUES (?, ?, ?)
-            """, (session_id, user_id[0], json.dumps(state)))
+            """, (session_id, user_id, json.dumps(state)))
             
             conn.commit()
             return session_id
@@ -350,7 +396,7 @@ class MemoryService:
         finally:
             conn.close()
 
-    def list_user_conversations(self, github_username: str) -> List[Dict]:
+    def list_user_conversations(self, slack_user_id: str) -> List[Dict]:
         """List all saved conversations for a user."""
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -360,9 +406,9 @@ class MemoryService:
                 SELECT cs.session_id, cs.created_at
                 FROM conversation_states cs
                 JOIN users u ON cs.user_id = u.id
-                WHERE u.github_username = ?
+                WHERE u.slack_user_id = ?
                 ORDER BY cs.created_at DESC
-            """, (github_username,))
+            """, (slack_user_id,))
             
             conversations = []
             for row in cursor.fetchall():
@@ -371,5 +417,44 @@ class MemoryService:
                     'created_at': row[1]
                 })
             return conversations
+        finally:
+            conn.close()
+
+    def get_user_by_slack_id(self, slack_user_id: str) -> Optional[Dict]:
+        """Retrieve user information by Slack user ID."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "SELECT * FROM users WHERE slack_user_id = ?",
+            (slack_user_id,)
+        )
+        
+        row = cursor.fetchone()
+        if row:
+            columns = [desc[0] for desc in cursor.description]
+            user_data = dict(zip(columns, row))
+            conn.close()
+            return user_data
+        
+        conn.close()
+        return None 
+
+    def update_user_slack_id(self, github_username: str, slack_user_id: str) -> bool:
+        """Update a user's Slack ID."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                UPDATE users 
+                SET slack_user_id = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE github_username = ?
+            """, (slack_user_id, github_username))
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Error updating user Slack ID: {e}")
+            return False
         finally:
             conn.close() 

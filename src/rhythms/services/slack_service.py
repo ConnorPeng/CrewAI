@@ -39,7 +39,8 @@ class SlackBot:
         self.client = None
         self.event_counter = 0
         self.user_responses = {}
-        self.rhythms = None  # Will be set when handling commands
+        # Initialize Rhythms with default callbacks
+        self.rhythms = Rhythms()  # Initialize early
         self.current_thread_ts = None  # Track current thread
         self.active_standup = None  # Track active standup
         self._initialized = True
@@ -76,9 +77,9 @@ class SlackBot:
             self.socket_client.connect()
             
             # For testing: Trigger notification immediately after connection
-            if hasattr(self, 'scheduler') and self.scheduler:
-                logger.info("Testing: Triggering immediate notification...")
-                self.scheduler.prepare_and_notify()
+            # if hasattr(self, 'scheduler') and self.scheduler:
+            #     logger.info("Testing: Triggering immediate notification...")
+            #     self.scheduler.prepare_and_notify()
             
             # Keep the bot running and check schedules
             last_schedule_check = 0
@@ -190,53 +191,37 @@ class SlackBot:
         self.socket_client.socket_mode_request_listeners.append(socket_handler)
         logger.info("Socket handler setup complete")
 
-    def _handle_message(self, event: Dict[str, Any]) -> None:
-        """Handle incoming messages."""
-        channel_id = event["channel"]
-        user_id = event["user"]
-        bot_id = event.get("bot_id")
-        text = event.get("text", "").strip()
-        logger.info(f"Received message from {user_id}: {text}")
-        
-        if bot_id:
-            logger.info(f"Ignoring message from bot: {event}")
-            return
-
-        # Process crew-related commands
-        if "crew" in text.lower():
-            self._handle_crew_command(channel_id, text)
-
-    def _handle_crew_command(self, channel_id: str, text: str) -> None:
-        """Handle crew-related commands."""
-        try:
-            # Example: Get crew information
-            crew_info = self.github_service.get_crew_info()
-            
-            # Format the response
-            response = "Current Crew Information:\n"
-            for member in crew_info:
-                response += f"• {member['name']} - {member['role']}\n"
-            
-            self.client.chat_postMessage(
-                channel=channel_id,
-                text=response
-            )
-                
-        except Exception as e:
-            logger.error(f"Error handling crew command: {str(e)}")
-            self.client.chat_postMessage(
-                channel=channel_id,
-                text="Sorry, I encountered an error. Please try again."
-            )
-
     def _handle_standup_command(self, event: Dict[str, Any]) -> None:
         """Handle the standup command."""
         channel_id = event["channel"]
-        user_id = event["user"]  # This is the correct Slack user ID
-        logger.info(f"Received standup command from {user_id} in channel {channel_id}")
+        slack_user_id = event["user"]  # This is the Slack user ID
+        logger.info(f"Received standup command from {slack_user_id} in channel {channel_id}")
         text = event.get("text", "").strip().lower()
         thread_ts = event.get("thread_ts", event.get("ts"))
         
+        # Get user from database
+        try:
+            # Try to get user by Slack ID
+            user_data = self.rhythms.memory_service.get_user_by_slack_id(slack_user_id)
+            if not user_data:
+                # If user not found, return error message
+                self._send_to_slack(
+                    channel_id,
+                    "User not found. Please register first before using the standup feature.",
+                    thread_ts
+                )
+                return
+            
+        except Exception as e:
+            logger.error(f"Error getting user: {e}")
+            self._send_to_slack(
+                channel_id,
+                "Error retrieving user profile. Please contact support.",
+                thread_ts
+            )
+            return
+        
+        logger.info(f"connor debuggingUser self.active_standup: {self.active_standup}")
         # Handle pause command
         if "pause" in text:
             # Check if there's any active standup (regardless of thread)
@@ -250,28 +235,8 @@ class SlackBot:
             
             # Get the active standup thread for saving state
             active_thread = self.active_standup
-            
-            # If we don't have a state yet but we have an active standup, create one
-            if not (self.rhythms and self.rhythms.current_conversation_state):
-                if not self.rhythms:
-                    self.rhythms = Rhythms(
-                        slack_interaction_callback=lambda prompt: self._get_user_input(
-                            channel_id, user_id, prompt, active_thread
-                        ),
-                        slack_output_callback=lambda msg: self._send_to_slack(
-                            channel_id,
-                            self._format_dict_for_slack(msg) if isinstance(msg, dict) else str(msg),
-                            active_thread
-                        )
-                    )
-                self.rhythms.current_conversation_state = {
-                    'status': 'active',
-                    'thread_ts': active_thread,
-                    'channel_id': channel_id,
-                    'user_id': user_id
-                }
                 
-            session_id = self.rhythms.save_conversation_state()
+            session_id = self.rhythms.save_conversation_state(slack_user_id)
             if session_id:
                 # Send message to both the original thread and the thread where pause was requested
                 self._send_to_slack(
@@ -301,7 +266,7 @@ class SlackBot:
             if not self.rhythms:
                 self.rhythms = Rhythms(
                     slack_interaction_callback=lambda prompt: self._get_user_input(
-                        channel_id, user_id, prompt, self.current_thread_ts
+                        channel_id, slack_user_id, prompt, self.current_thread_ts
                     ),
                     slack_output_callback=lambda msg: self._send_to_slack(
                         channel_id, 
@@ -311,7 +276,7 @@ class SlackBot:
                 )
             
             # Get the most recent session
-            conversations = self.rhythms.memory_service.list_user_conversations(user_id)
+            conversations = self.rhythms.memory_service.list_user_conversations(slack_user_id)
             if not conversations:
                 self._send_to_slack(
                     channel_id,
@@ -325,7 +290,7 @@ class SlackBot:
                 # Start a new thread for the resumed session
                 response = self.client.chat_postMessage(
                     channel=channel_id,
-                    text=f"Continuing standup for <@{user_id}>... 🔄"
+                    text=f"Continuing standup for <@{slack_user_id}>... 🔄"
                 )
                 self.current_thread_ts = response['ts']
                 # Set this as the active standup
@@ -359,13 +324,13 @@ class SlackBot:
                 # Start a new thread for this standup
                 response = self.client.chat_postMessage(
                     channel=channel_id,
-                    text=f"Starting standup process for <@{user_id}>... 🚀",
+                    text=f"Starting standup process for <@{slack_user_id}>... 🚀",
                     blocks=[
                         {
                             "type": "section",
                             "text": {
                                 "type": "mrkdwn",
-                                "text": f"Starting standup process for <@{user_id}>... 🚀\nI'll gather your GitHub activity and help create your standup update.\n\nYou can use these commands during the standup:\n• `@bot pause` - Pause the current session\n• `@bot resume` - Resume your paused session"
+                                "text": f"Starting standup process for <@{slack_user_id}>... 🚀\nI'll gather your GitHub activity and help create your standup update.\n\nYou can use these commands during the standup:\n• `@bot pause` - Pause the current session\n• `@bot resume` - Resume your paused session"
                             }
                         }
                     ],
@@ -389,7 +354,7 @@ class SlackBot:
                 # Initialize Rhythms with callbacks
                 self.rhythms = Rhythms(
                     slack_interaction_callback=lambda prompt: self._get_user_input(
-                        channel_id, user_id, prompt, self.current_thread_ts
+                        channel_id, slack_user_id, prompt, self.current_thread_ts
                     ),
                     slack_output_callback=output_callback
                 )
@@ -399,7 +364,7 @@ class SlackBot:
                     'status': 'active',
                     'thread_ts': self.current_thread_ts,
                     'channel_id': channel_id,
-                    'user_id': user_id,
+                    'user_id': slack_user_id,
                     'start_time': datetime.now().isoformat()
                 }
                 

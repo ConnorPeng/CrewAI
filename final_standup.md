@@ -1,18 +1,16 @@
-FINAL STANDUP:
+Present the draft clearly to the user again and attempt to get their feedback or updates.
 
-# Standup Summary
+# Standup Report
 
 ## Accomplishments
-- **Commit Updates**: Made 4 commits in [ConnorPeng/CrewAI](https://github.com/ConnorPeng/CrewAI):
-  - Update
-  - Add scheduler
-  - Fix some bugs, pause and resume feature
-  - Fix some bugs
-- **Setup the Slack Bot OAuth**: Completed task on Linear - [JHRHY-18](https://linear.app/rhythms/issue/JHRHY-18) at 2023-10-13T09:00:00Z
+- **Setup the Slack Bot OAuth** was completed. [View Issue](https://linear.app/rhythms/issue/JHRHY-18)
+  _Completed on 2023-10-13 at 09:00:00 UTC_
 
 ## Blockers
-- Awaiting update from the XYZ team. No progress reported.
-- Waiting for iOS test device; no update on delivery.
+- No current blockers identified.
 
 ## Plans
-- **Slack App Setup**: Continue working on the task, [Slack App Setup](https://linear.app/rhythms/issue/JHRHY-5), status is "In Progress." Last updated on 2023-10-13T12:00:00Z
+- Continue progress on **Slack App Setup** with current status as "In Progress". [View Issue](https://linear.app/rhythms/issue/JHRHY-5)
+  _Last updated on 2023-10-13 at 12:00:00 UTC_
+
+Does this look complete?
