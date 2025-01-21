@@ -2,7 +2,7 @@ from slack_sdk.web import WebClient
 from slack_sdk.socket_mode import SocketModeClient
 from slack_sdk.socket_mode.response import SocketModeResponse
 from slack_sdk.socket_mode.request import SocketModeRequest
-from typing import Dict, Any
+from typing import Dict, Any, List
 import os
 import logging
 import ssl
@@ -10,6 +10,8 @@ from ..services.github_service import GitHubService
 from ..crew import Rhythms
 from datetime import datetime
 import time
+import re
+from queue import Queue
 
 # Configure logging
 logging.basicConfig(
@@ -267,11 +269,6 @@ class SlackBot:
                 self.rhythms = Rhythms(
                     slack_interaction_callback=lambda prompt: self._get_user_input(
                         channel_id, slack_user_id, prompt, self.current_thread_ts
-                    ),
-                    slack_output_callback=lambda msg: self._send_to_slack(
-                        channel_id, 
-                        self._format_dict_for_slack(msg) if isinstance(msg, dict) else str(msg), 
-                        self.current_thread_ts
                     )
                 )
             
@@ -298,16 +295,17 @@ class SlackBot:
                 
                 standup_crew = self.rhythms.standup_crew()
                 result = standup_crew.kickoff()
+                logger.info(f"Raw standup result: {result}")  # Add debug logging
                 
                 if result:
                     formatted_result = (
-                        self._format_dict_for_slack(result)
-                        if isinstance(result, dict)
-                        else str(result)
+                        self._format_dict_for_slack(result.to_dict())
                     )
+                    logger.info(f"Formatted result: {formatted_result}")  # Add debug logging
+                    
                     self._send_to_slack(
                         channel_id,
-                        f"Resumed standup completed:\n{formatted_result}",
+                        formatted_result,
                         self.current_thread_ts
                     )
             else:
@@ -340,23 +338,11 @@ class SlackBot:
                 # Set this as the active standup
                 self.active_standup = self.current_thread_ts
 
-                def output_callback(message):
-                    """Callback for CrewAI output"""
-                    if not message:
-                        return
-                    formatted_message = (
-                        self._format_dict_for_slack(message)
-                        if isinstance(message, dict)
-                        else str(message)
-                    )
-                    self._send_to_slack(channel_id, formatted_message, self.current_thread_ts)
-
-                # Initialize Rhythms with callbacks
+                # Initialize Rhythms with callbacks using the new method
                 self.rhythms = Rhythms(
                     slack_interaction_callback=lambda prompt: self._get_user_input(
                         channel_id, slack_user_id, prompt, self.current_thread_ts
-                    ),
-                    slack_output_callback=output_callback
+                    )
                 )
                 
                 # Initialize conversation state immediately
@@ -370,16 +356,18 @@ class SlackBot:
                 
                 standup_crew = self.rhythms.standup_crew()
                 result = standup_crew.kickoff()
-
+                logger.info(f"Raw standup result: {result}")
+                logger.info(f"connor debugging here 103 message output {result}")
+                logger.info(f"connor debugging here 104 message output type {type(result)}")
                 if result:
                     formatted_result = (
-                        self._format_dict_for_slack(result)
-                        if isinstance(result, dict)
-                        else str(result)
+                        self._format_dict_for_slack(result.raw)
                     )
+                    logger.info(f"Formatted result: {formatted_result}")  # Add debug logging
+                    
                     self._send_to_slack(
                         channel_id,
-                        f"Here's your standup summary:\n{formatted_result}",
+                        formatted_result,
                         self.current_thread_ts
                     )
                     # Clear active standup when complete
@@ -395,55 +383,126 @@ class SlackBot:
                 # Clear active standup on error
                 self.active_standup = None
 
-    def _format_dict_for_slack(self, data: Dict) -> str:
-        """Format a dictionary into a readable Slack message."""
-        if not isinstance(data, dict):
-            return str(data)
-            
-        formatted_sections = []
+    def _format_dict_for_slack(self, data: str) -> str:
+        """Format a dictionary into a readable Slack message using Block Kit patterns."""
+        logger.info(f"Input data to format: {data}")
+        logger.info(f"Input data type: {type(data)}")
         
-        # Handle GitHub activity data
-        if "completed_work" in data:
-            if data["completed_work"]:
-                formatted_sections.append("*:white_check_mark: Completed Work:*")
-                for item in data["completed_work"]:
-                    formatted_sections.append(f"• {item}")
+        # Check if this is markdown formatted text instead of a proper dict structure
+        if isinstance(data, str):
+            logger.info("Received markdown text in dict format")
+            # Use the common formatting function
+            sections = self._format_markdown_to_blocks(data, final=True)
+            return {"blocks": sections}
+        else:
+            logger.info("Received non-string data in dict format")
+            return {"blocks": []}
+
+    def _format_markdown_to_blocks(self, markdown_text: str, user_id: str = None, include_prompt: bool = False, final: bool = False) -> List[Dict]:
+        """Convert markdown text to Slack Block Kit format.
+        
+        Args:
+            markdown_text: The markdown text to convert
+            user_id: Optional user ID to mention in the review prompt
+            include_prompt: Whether to include the review prompt section
+            final: Whether this is a final standup report
+        
+        Returns:
+            List of Block Kit blocks
+        """
+        sections = []
+        current_section = None
+        current_items = []
+        
+        for line in markdown_text.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
             
-        if "work_in_progress" in data:
-            if data["work_in_progress"]:
-                formatted_sections.append("\n*:construction: Work in Progress:*")
-                for item in data["work_in_progress"]:
-                    formatted_sections.append(f"• {item}")
-            
-        if "potential_blockers" in data:
-            if data["potential_blockers"]:
-                formatted_sections.append("\n*:warning: Potential Blockers:*")
-                for item in data["potential_blockers"]:
-                    formatted_sections.append(f"• {item}")
-                    
-        # If no data in standard categories, format generically
-        if not formatted_sections:
-            for key, value in data.items():
-                formatted_key = key.replace("_", " ").title()
-                if isinstance(value, list):
-                    formatted_sections.append(f"*{formatted_key}:*")
-                    for item in value:
-                        formatted_sections.append(f"• {item}")
-                else:
-                    formatted_sections.append(f"*{formatted_key}:* {value}")
-                    
-        return "\n".join(formatted_sections) if formatted_sections else "No data to display"
+            if line.startswith('# '):
+                # Main header
+                sections.append({
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "🎯 Final Standup Report" if final else "📝 Standup Report Draft",
+                        "emoji": True
+                    }
+                })
+                sections.append({"type": "divider"})
+            elif line.startswith('## '):
+                # If we have a previous section, save it
+                if current_section and current_items:
+                    sections.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"{current_section['emoji']} *{current_section['title']}*"
+                        }
+                    })
+                    sections.append({
+                        "type": "context",
+                        "elements": [{
+                            "type": "mrkdwn",
+                            "text": "\n".join(current_items)
+                        }]
+                    })
+                    sections.append({"type": "divider"})
+                
+                # Start new section
+                section_title = line[2:].strip().rstrip(':')
+                current_section = {
+                    "title": section_title,
+                    "emoji": "✅" if "Accomplishments" in section_title else 
+                            "⚠️" if "Blockers" in section_title else 
+                            "📋" if "Plans" in section_title else "📝"
+                }
+                current_items = []
+            elif line.startswith('- '):
+                # Format list items, handling links specially
+                item = line[2:]
+                # Convert markdown links to Slack format
+                item = re.sub(r'\[(.*?)\]\((.*?)\)', r'<\2|\1>', item)
+                current_items.append(f"• {item}")
+
+        # Add the last section if exists
+        if current_section and current_items:
+            sections.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"{current_section['emoji']} *{current_section['title']}*"
+                }
+            })
+            sections.append({
+                "type": "context",
+                "elements": [{
+                    "type": "mrkdwn",
+                    "text": "\n".join(current_items)
+                }]
+            })
+            sections.append({"type": "divider"})
+
+        # Add review prompt section if requested and not final
+        if include_prompt and user_id and not final:
+            sections.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"Hey <@{user_id}>, please review this standup draft and let me know if you'd like to make any changes. You can:\n• Add new items\n• Remove items\n• Edit existing items"
+                }
+            })
+
+        return sections
 
     def _get_user_input(self, channel_id: str, user_id: str, prompt: str, thread_ts: str) -> str:
         """Get user input from Slack with a timeout."""
-        import threading
-        from queue import Queue
         logger.info(f"Getting user input for {user_id} in channel {channel_id} prompt: {prompt}")
         logger.info(f"Using thread_ts: {thread_ts}")
         
         # Create a new response queue for this request
         response_queue = Queue()
-        key = (channel_id, user_id, thread_ts)  # Add thread_ts to make the key unique per thread
+        key = (channel_id, user_id, thread_ts)
         
         # Store the queue and prompt
         self.user_responses[key] = {
@@ -451,57 +510,24 @@ class SlackBot:
             'last_prompt': prompt,
             'timestamp': datetime.now().isoformat()
         }
-        logger.info(f"Created response queue with key: {key}")
-        logger.info(f"Current response queues after adding: {list(self.user_responses.keys())}")
 
-        # Format the prompt for better readability
-        formatted_prompt = (
-            f"<@{user_id}> {prompt}\n"
-            "Please respond in this thread. Your response will be used to update your standup summary."
-        )
+        # Format the prompt into blocks
+        sections = self._format_markdown_to_blocks(prompt, user_id, include_prompt=True)
 
-        # Send the prompt to the user
+        # Send message to Slack
         message = self.client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,
-            text=formatted_prompt,
-            blocks=[
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": formatted_prompt
-                    }
-                },
-                {
-                    "type": "context",
-                    "elements": [
-                        {
-                            "type": "mrkdwn",
-                            "text": "💡 _Type your response below. Be as detailed as you'd like._"
-                        }
-                    ]
-                }
-            ],
-            link_names=True  # This ensures that user mentions are properly linked
+            text="Please review your standup draft",  # Fallback text
+            blocks=sections,
+            link_names=True
         )
         logger.info(f"Sent prompt message with ts: {message.get('ts')}")
 
         # Wait for response with timeout
         try:
-            logger.info(f"Waiting for response on queue with key: {key}")
             response = response_queue.get(timeout=300)  # 5 minute timeout
             logger.info(f"Got response: {response}")
-            
-            # Update conversation state
-            if self.rhythms and not self.rhythms.current_conversation_state:
-                self.rhythms.current_conversation_state = {
-                    'status': 'active',
-                    'last_prompt': prompt,
-                    'thread_ts': thread_ts,
-                    'channel_id': channel_id,
-                    'user_id': user_id
-                }
             
             # Acknowledge receipt of response
             self.client.chat_postMessage(
@@ -514,7 +540,6 @@ class SlackBot:
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Error getting response: {error_msg}")
-            logger.exception("Full traceback:")
             
             if "timeout" in error_msg.lower():
                 error_response = "⚠️ No response received within the time limit. Please try the standup command again."
@@ -528,38 +553,191 @@ class SlackBot:
             )
             return "No response received"
         finally:
-            logger.info(f"Cleaning up response queue for key: {key}")
+            # Clean up the response queue
             if key in self.user_responses:
                 del self.user_responses[key]
-            logger.info(f"Current response queues after cleanup: {list(self.user_responses.keys())}")
 
     def _send_to_slack(self, channel_id: str, message: str, thread_ts: str) -> None:
-        """Send a message to Slack channel in thread."""
+        """Send a message to Slack channel in thread using Block Kit for better formatting."""
         try:
-            # Clean up the message
-            message = str(message).strip()
             if not message:
                 return
             
-            # Split long messages
-            max_length = 3000
-            messages = [message[i:i + max_length] for i in range(0, len(message), max_length)]
+            logger.info(f"Sending message to Slack: {message}")
             
-            for msg in messages:
-                # Format code blocks properly
-                if '```' in msg:
-                    msg = f"```\n{msg.replace('```', '')}\n```"
-                
+            # If message is already formatted with blocks
+            if isinstance(message, dict) and "blocks" in message:
                 self.client.chat_postMessage(
                     channel=channel_id,
                     thread_ts=thread_ts,
-                    text=msg,
+                    blocks=message["blocks"],
+                    text="Standup Update",  # Fallback text
                     unfurl_links=False,
-                    unfurl_media=False
+                    unfurl_media=False,
+                    parse='mrkdwn'
+                )
+                return
+            
+            # For string messages
+            clean_message = str(message)
+            if len(clean_message) > 3000:
+                # Split long messages
+                messages = [clean_message[i:i+3000] for i in range(0, len(clean_message), 3000)]
+                for msg in messages:
+                    blocks = self._create_message_blocks(msg)
+                    self.client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text=msg,  # Fallback text
+                        blocks=blocks,
+                        unfurl_links=False,
+                        unfurl_media=False,
+                        parse='mrkdwn'
+                    )
+            else:
+                blocks = self._create_message_blocks(clean_message)
+                self.client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=clean_message,  # Fallback text
+                    blocks=blocks,
+                    unfurl_links=False,
+                    unfurl_media=False,
+                    parse='mrkdwn'
                 )
             
         except Exception as e:
             logger.error(f"Error sending message to Slack: {str(e)}")
+            logger.exception("Full traceback:")
+
+    def _create_message_blocks(self, message: str) -> List[Dict]:
+        """Create Block Kit blocks for message formatting."""
+        blocks = []
+        
+        # If this is a standup update
+        if "🎯" in message and "Standup Update" in message:
+            # Add header
+            blocks.append({
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "Today's Standup Update 🎯",
+                    "emoji": True
+                }
+            })
+            
+            # Add divider
+            blocks.append({
+                "type": "divider"
+            })
+            
+            # Split into sections and process each
+            sections = message.split("\n\n")
+            for section in sections[1:]:  # Skip the header
+                if not section.strip():
+                    continue
+                    
+                # Parse section title and content
+                lines = section.split("\n")
+                if not lines:
+                    continue
+                    
+                title_line = lines[0].strip()
+                content_lines = lines[1:] if len(lines) > 1 else []
+                
+                # Extract emoji and title
+                if " *" in title_line:
+                    emoji, title = title_line.split(" *", 1)
+                    title = title.replace("*", "")
+                else:
+                    emoji = "📝"
+                    title = title_line
+                    
+                # Add section title
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"{emoji} *{title}*"
+                    }
+                })
+                
+                # Add content as a context block with better formatting
+                if content_lines:
+                    content_text = "\n".join(content_lines)
+                    blocks.append({
+                        "type": "context",
+                        "elements": [{
+                            "type": "mrkdwn",
+                            "text": content_text
+                        }]
+                    })
+                
+                # Add divider between sections
+                blocks.append({
+                    "type": "divider"
+                })
+                
+        # For user prompts
+        elif "Please respond in this thread" in message:
+            blocks.extend([
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": message.split("\n")[0]  # Main prompt
+                    }
+                },
+                {
+                    "type": "context",
+                    "elements": [{
+                        "type": "mrkdwn",
+                        "text": ":bulb: _Type your response below. Your input will be used to update the standup summary._"
+                    }]
+                }
+            ])
+            
+        # For acknowledgment messages
+        elif "Got your response!" in message:
+            blocks.append({
+                "type": "context",
+                "elements": [{
+                    "type": "mrkdwn",
+                    "text": ":white_check_mark: _Got your response! Processing and updating your standup summary..._"
+                }]
+            })
+            
+        # For error messages
+        elif "Error" in message or "error" in message:
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f":warning: {message}"
+                }
+            })
+            
+        # For all other messages
+        else:
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": message
+                }
+            })
+        
+        # Remove consecutive dividers and trailing divider
+        cleaned_blocks = []
+        for i, block in enumerate(blocks):
+            if block["type"] == "divider":
+                if i == len(blocks) - 1:  # Skip trailing divider
+                    continue
+                if i > 0 and blocks[i-1]["type"] == "divider":  # Skip consecutive dividers
+                    continue
+            cleaned_blocks.append(block)
+        
+        return cleaned_blocks
 
     def cleanup(self) -> None:
         """Clean up resources."""

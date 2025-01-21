@@ -1,16 +1,16 @@
-Present the draft clearly to the user again and attempt to get their feedback or updates.
+Here is the current standup draft:
 
-# Standup Report
+### Accomplishments
+- [Setup the Slack Bot OAuth](https://linear.app/rhythms/issue/JHRHY-18) was completed.
+- Made 1 commit in ConnorPeng/CrewAI:
+  - add pause resume to the database
 
-## Accomplishments
-- **Setup the Slack Bot OAuth** was completed. [View Issue](https://linear.app/rhythms/issue/JHRHY-18)
-  _Completed on 2023-10-13 at 09:00:00 UTC_
-
-## Blockers
+### Blockers
 - No current blockers identified.
 
-## Plans
-- Continue progress on **Slack App Setup** with current status as "In Progress". [View Issue](https://linear.app/rhythms/issue/JHRHY-5)
-  _Last updated on 2023-10-13 at 12:00:00 UTC_
+### Plans
+- Continue working on the [Slack App Setup](https://linear.app/rhythms/issue/JHRHY-5)
+  - Status: In Progress
+  - Last updated: 2023-10-03T12:00:00Z
 
 Does this look complete?

@@ -37,11 +37,6 @@ class SchedulerService:
             rhythms = Rhythms(
                 slack_interaction_callback=lambda prompt: self.slack_bot._get_user_input(
                     channel_id, user_id, prompt, thread_ts if 'thread_ts' in locals() else None
-                ),
-                slack_output_callback=lambda msg: self.slack_bot._send_to_slack(
-                    channel_id,
-                    self.slack_bot._format_dict_for_slack(msg) if isinstance(msg, dict) else str(msg),
-                    thread_ts if 'thread_ts' in locals() else None
                 )
             )
 
@@ -142,11 +137,6 @@ class SchedulerService:
                 # Update the Rhythms instance callbacks to use thread context
                 rhythms.slack_interaction_callback = lambda prompt: self.slack_bot._get_user_input(
                     channel_id, user_id, prompt, thread_ts
-                )
-                rhythms.slack_output_callback = lambda msg: self.slack_bot._send_to_slack(
-                    channel_id,
-                    self.slack_bot._format_dict_for_slack(msg) if isinstance(msg, dict) else str(msg),
-                    thread_ts
                 )
                 
                 logger.info(f"Starting user update interaction in thread {thread_ts}...")

@@ -77,10 +77,9 @@ class MemoryContextTool(BaseTool):
         
 @CrewBase
 class Rhythms():
-    def __init__(self, slack_interaction_callback=None, slack_output_callback=None, db_path: str = "memory.db"):
+    def __init__(self, slack_interaction_callback=None, db_path: str = "memory.db"):
         super().__init__()
         self.slack_interaction_callback = slack_interaction_callback
-        self.slack_output_callback = slack_output_callback
         self.memory_service = MemoryService(db_path=db_path)
         self.current_conversation_state = None
         self.agent_outputs = {}  # Store outputs from each agent
@@ -198,22 +197,132 @@ class Rhythms():
             )
 
         if isinstance(content, str):
-            # If this is a draft (has sections), check if it's approved
+            # If this is a draft (has sections), format it with Block Kit
             if any(section in content.lower() for section in ["accomplishments:", "blockers:", "plans:"]):
-                # This is a draft being shown to the user
-                return content
+                # Convert the draft into Block Kit format
+                blocks = [
+                    {
+                        "type": "header",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "📝 Standup Draft",
+                            "emoji": True
+                        }
+                    },
+                    {
+                        "type": "divider"
+                    }
+                ]
+                
+                # Split content into sections
+                sections = content.split('\n\n')
+                for section in sections:
+                    if not section.strip():
+                        continue
+                        
+                    # Parse section title and items
+                    lines = section.split('\n')
+                    if not lines:
+                        continue
+                        
+                    title = lines[0].strip(':').strip()
+                    items = [line.strip('- ').strip() for line in lines[1:] if line.strip()]
+                    
+                    # Add section with appropriate emoji
+                    emoji = "✅" if "accomplishments" in title.lower() else "🚧" if "progress" in title.lower() else "⚠️" if "blockers" in title.lower() else "📋"
+                    blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*{emoji} {title}*"
+                        }
+                    })
+                    
+                    if items:
+                        # Format items as bullet points
+                        formatted_items = "\n".join(f"• {item}" for item in items)
+                        blocks.append({
+                            "type": "context",
+                            "elements": [{
+                                "type": "mrkdwn",
+                                "text": formatted_items
+                            }]
+                        })
+                        
+                    blocks.append({
+                        "type": "divider"
+                    })
+                
+                # Add review prompt
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "Please review this draft and let me know if you'd like to make any changes. You can:\n• Add new items\n• Remove items\n• Edit existing items"
+                    }
+                })
+                
+                return {"blocks": blocks}
+                
             elif "FINAL STANDUP:" in content:
-                # Extract and store the final content
+                # Extract and format the final content
                 final_content = content.split("FINAL STANDUP:", 1)[1].strip()
+                
+                # Create Block Kit format for final standup
+                blocks = [
+                    {
+                        "type": "header",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "🎯 Today's Standup Update",
+                            "emoji": True
+                        }
+                    },
+                    {
+                        "type": "divider"
+                    }
+                ]
+                
+                # Split and format sections
+                sections = final_content.split('\n\n')
+                for section in sections:
+                    if not section.strip():
+                        continue
+                    
+                    lines = section.split('\n')
+                    title = lines[0].strip(':').strip()
+                    items = [line.strip('- ').strip() for line in lines[1:] if line.strip()]
+                    
+                    # Add section with appropriate emoji
+                    emoji = "✅" if "accomplishments" in title.lower() else "🚧" if "progress" in title.lower() else "⚠️" if "blockers" in title.lower() else "📋"
+                    blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*{emoji} {title}*"
+                        }
+                    })
+                    
+                    if items:
+                        formatted_items = "\n".join(f"• {item}" for item in items)
+                        blocks.append({
+                            "type": "context",
+                            "elements": [{
+                                "type": "mrkdwn",
+                                "text": formatted_items
+                            }]
+                        })
+                        
+                    blocks.append({
+                        "type": "divider"
+                    })
+                
+                # Store the final content
                 self._store_standup_update("ConnorPeng", final_content)
-                # Set finalization flag
                 self.is_finalized = True
-                # Stop further processing
-                return AgentFinish(
-                    thought="Standup finalized successfully",
-                    output=final_content,
-                    text="Standup finalized successfully"
-                )
+                
+                return {"blocks": blocks}
+                
             else:
                 # This is a user update, let the agent process it
                 return content
@@ -424,50 +533,13 @@ class Rhythms():
         if not content:
             logger.warning("No content extracted from message")
             return
-            
+        
+        logger.info(f"connor debugging here 100 message output {content}")
         # First handle the output
         output_result = self._handle_output(agent_name, content)
-        if isinstance(output_result, AgentFinish):
-            # If we got an AgentFinish, we're done
-            logger.info("Received AgentFinish, ending processing")
-            return output_result
-        elif output_result:
-            return output_result
-            
-        # Check if this is a final standup
-        if isinstance(content, str):
-            if "FINAL STANDUP:" in content:
-                logger.info("Found final standup marker, storing update")
-                final_content = content.split("FINAL STANDUP:", 1)[1].strip()
-                self._store_standup_update("ConnorPeng", final_content)
-                # Clear active standup when finished
-                self.active_standup = None
-            else:
-                # This is a user response, pass it back to the agent for processing
-                logger.info("Processing user response")
-                if self.slack_interaction_callback:
-                    # If the content looks like a draft (has sections), it's for user review
-                    if any(section in content.lower() for section in ["accomplishments", "blockers", "plans"]):
-                        response = self.slack_interaction_callback(f"{content}\nDoes this look complete?")
-                    else:
-                        # This is a user update, let the agent process it
-                        response = content
-                    logger.info(f"Got response from slack callback: {response}")
-                    return response
-        elif isinstance(content, dict):
-            if content.get('raw') and "FINAL STANDUP:" in content['raw']:
-                logger.info("Found final standup marker in raw output, storing update")
-                final_content = content['raw'].split("FINAL STANDUP:", 1)[1].strip()
-                self._store_standup_update("ConnorPeng", final_content)
-                # Clear active standup when finished
-                self.active_standup = None
-            else:
-                # This might be a user response in a structured format
-                logger.info("Processing structured user response")
-                if self.slack_interaction_callback:
-                    response = self.slack_interaction_callback(content.get('raw', str(content)))
-                    logger.info(f"Got response from slack callback: {response}")
-                    return response
+        logger.info(f"connor debugging here 101 message output {output_result}")
+        
+        return output_result
 
     @crew
     def standup_crew(self) -> Crew:
@@ -614,29 +686,29 @@ class Rhythms():
             state=self.current_conversation_state
         )
         
-        logger.info("\n=== Crew Creation Summary ===")
-        logger.info(f"Total tasks included: {len(tasks_to_include)}")
-        if tasks_to_include:
-            logger.info(f"First task to execute: {tasks_to_include[0].description}")
-            logger.info(f"Task sequence: {[t.description for t in tasks_to_include]}")
-            logger.info("Task outputs available:")
-            for task in tasks_to_include:
-                try:
-                    if hasattr(task, 'output') and task.output:
-                        logger.info(f"- {task.description}: {task.output.summary if hasattr(task.output, 'summary') else 'No summary available'}")
-                    else:
-                        logger.info(f"- {task.description}: No output")
-                except Exception as e:
-                    logger.warning(f"Could not access task output for {task.description}: {str(e)}")
-                    logger.info(f"- {task.description}: Error accessing output")
-        logger.info("=== Crew Creation Complete ===")
+        # logger.info("\n=== Crew Creation Summary ===")
+        # logger.info(f"Total tasks included: {len(tasks_to_include)}")
+        # if tasks_to_include:
+        #     logger.info(f"First task to execute: {tasks_to_include[0].description}")
+        #     logger.info(f"Task sequence: {[t.description for t in tasks_to_include]}")
+        #     logger.info("Task outputs available:")
+        #     for task in tasks_to_include:
+        #         try:
+        #             if hasattr(task, 'output') and task.output:
+        #                 logger.info(f"- {task.description}: {task.output.summary if hasattr(task.output, 'summary') else 'No summary available'}")
+        #             else:
+        #                 logger.info(f"- {task.description}: No output")
+        #         except Exception as e:
+        #             logger.warning(f"Could not access task output for {task.description}: {str(e)}")
+        #             logger.info(f"- {task.description}: Error accessing output")
+        # logger.info("=== Crew Creation Complete ===")
         
         return crew
 
     def _handle_task_completion(self, output: 'TaskOutput', task: Task) -> None:
         """Handle task completion by updating agent outputs and completed agents."""
-        logger.info(f"=== Handling Task Completion ===")
-        logger.info(f"Task completed: {task.description}")
+        # logger.info(f"=== Handling Task Completion ===")
+        # logger.info(f"Task completed: {task.description}")
         
         # Initialize conversation state if not exists
         if not self.current_conversation_state:
@@ -667,18 +739,18 @@ class Rhythms():
             self.current_conversation_state['last_active_agent'] = agent_name
             self.current_conversation_state['agent_outputs'] = self.agent_outputs
             
-            logger.info(f"Updated conversation state:")
-            logger.info(f"- Task Description: {output.description}")
-            logger.info(f"- Task Summary: {output.summary}")
-            logger.info(f"- Completed agents: {self.current_conversation_state['completed_agents']}")
-            logger.info(f"- Last active agent: {self.current_conversation_state['last_active_agent']}")
-            logger.info(f"- Agent outputs count: {len(self.agent_outputs)}")
+            # logger.info(f"Updated conversation state:")
+            # logger.info(f"- Task Description: {output.description}")
+            # logger.info(f"- Task Summary: {output.summary}")
+            # logger.info(f"- Completed agents: {self.current_conversation_state['completed_agents']}")
+            # logger.info(f"- Last active agent: {self.current_conversation_state['last_active_agent']}")
+            # logger.info(f"- Agent outputs count: {len(self.agent_outputs)}")
             
             # If the output has JSON or Pydantic data, log it
-            if hasattr(output, 'json_dict') and output.json_dict:
-                logger.info(f"- JSON Output: {json.dumps(output.json_dict, indent=2)}")
-            if hasattr(output, 'pydantic') and output.pydantic:
-                logger.info(f"- Pydantic Output: {output.pydantic}")
+            # if hasattr(output, 'json_dict') and output.json_dict:
+            #     logger.info(f"- JSON Output: {json.dumps(output.json_dict, indent=2)}")
+            # if hasattr(output, 'pydantic') and output.pydantic:
+            #     logger.info(f"- Pydantic Output: {output.pydantic}")
         else:
             logger.warning(f"Task has no associated agent: {task.description}")
             
